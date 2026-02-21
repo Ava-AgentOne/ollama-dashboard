@@ -1261,11 +1261,22 @@ async function fetchStatus() {
 }
 
 // ── Fetch & Render History ───────────────────────────────────
+let lastHistoryHash = '';
+
+function historyHash(h) {
+  const r = h.requests||[], e = h.events||[];
+  return `${r.length}:${e.length}:${r.length ? r[r.length-1].time||'' : ''}`;
+}
+
 async function fetchHistory() {
   try {
     const r=await fetch(`${API}/api/history`);
-    allHistory=await r.json();
-    renderHistory();
+    const data=await r.json();
+    const hash = historyHash(data);
+    const changed = hash !== lastHistoryHash;
+    lastHistoryHash = hash;
+    allHistory = data;
+    if (changed) renderHistory();
     const sr=await fetch(`${API}/api/history/stats`);
     const sd=await sr.json();
     document.getElementById('histFileInfo').textContent=
