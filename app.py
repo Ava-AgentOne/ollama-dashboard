@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Ollama Intel iGPU Monitoring Dashboard v2.1 — Backend"""
+"""Ollama Intel iGPU Monitoring Dashboard v2.2 — Backend"""
 
 from flask import Flask, jsonify, render_template, request as flask_request
 import requests
@@ -438,7 +438,7 @@ if __name__ == '__main__':
     except:
         pass
     threading.Thread(target=poll_loop, daemon=True).start()
-    print(f"[DASHBOARD] Ollama Monitor v2.1 starting on port 8088")
+    print(f"[DASHBOARD] Ollama Monitor v2.2 starting on port 8088")
     print(f"[DASHBOARD] Monitoring: {OLLAMA_URL}")
     print(f"[DASHBOARD] Container: {OLLAMA_CONTAINER}")
     print(f"[DASHBOARD] History: {HISTORY_FILE}")
