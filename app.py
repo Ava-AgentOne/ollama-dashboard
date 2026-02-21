@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Ollama Intel iGPU Monitoring Dashboard v2.2 — Backend"""
+"""Ollama Intel iGPU Monitoring Dashboard v2.3 — Backend"""
 
 from flask import Flask, jsonify, render_template, request as flask_request
 import requests
@@ -28,6 +28,9 @@ start_time = datetime.now().isoformat()
 seen_entries = set()
 MAX_SEEN = 5000
 
+# Track currently active model (from API, not logs)
+active_model = "—"
+
 # ── History persistence ──────────────────────────────────────────
 def load_history():
     try:
@@ -47,7 +50,7 @@ def save_history(data):
     with open(HISTORY_FILE, 'w') as f:
         json.dump(data, f, indent=2, default=str)
 
-# ── Docker log parsing ───────────────────────────────────────────
+# ── Request tracking from Docker logs (GIN lines only) ───────────
 last_log_ts = time.time()
 
 def entry_hash(entry):
@@ -55,7 +58,27 @@ def entry_hash(entry):
     key = f"{entry.get('time','')}|{entry.get('path','')}|{entry.get('client_ip','')}|{entry.get('duration','')}"
     return hashlib.md5(key.encode()).hexdigest()[:16]
 
+def parse_duration(dur_str):
+    """Parse GIN duration string to milliseconds"""
+    dur_str = dur_str.strip()
+    try:
+        if '\u00b5s' in dur_str:
+            return float(dur_str.replace('\u00b5s', '').strip()) / 1000
+        elif 'ms' in dur_str:
+            return float(dur_str.replace('ms', '').strip())
+        elif 's' in dur_str:
+            parts = dur_str.replace('s', '').strip()
+            if 'm' in parts:
+                mp = parts.split('m')
+                return (float(mp[0]) * 60 + float(mp[1])) * 1000
+            else:
+                return float(parts) * 1000
+    except:
+        pass
+    return 0
+
 def parse_docker_logs():
+    """Parse GIN request lines from Docker logs. Model name comes from API."""
     global last_log_ts, seen_entries
     try:
         import docker
@@ -68,106 +91,90 @@ def parse_docker_logs():
         lines = logs.split('\n')
         found = []
 
-        # First pass: collect token info from debug lines
-        token_info = {}
-        last_prompt_tokens = 0
-        last_eval_tokens = 0
-
-        for i, line in enumerate(lines):
-            eval_match = re.search(r'"eval_count"\s*:\s*(\d+)', line)
-            if eval_match:
-                last_eval_tokens = int(eval_match.group(1))
-            prompt_match = re.search(r'"prompt_eval_count"\s*:\s*(\d+)', line)
-            if prompt_match:
-                last_prompt_tokens = int(prompt_match.group(1))
-            eval_match2 = re.search(r'eval_count\s+(\d+)', line)
-            if eval_match2 and 'prompt' not in line.lower():
-                last_eval_tokens = int(eval_match2.group(1))
-            prompt_match2 = re.search(r'prompt_eval_count\s+(\d+)', line)
-            if prompt_match2:
-                last_prompt_tokens = int(prompt_match2.group(1))
-            total_match = re.search(r'total_duration\s+(\d+)', line)
-            if total_match:
-                token_info[i] = {
-                    "eval_tokens": last_eval_tokens,
-                    "prompt_tokens": last_prompt_tokens,
-                    "total_tokens": last_eval_tokens + last_prompt_tokens
-                }
-
-        # Second pass: parse GIN request lines
-        for i, line in enumerate(lines):
+        for line in lines:
             gin = re.search(
                 r'\[GIN\]\s+(\d{4}/\d{2}/\d{2}\s+-\s+\d{2}:\d{2}:\d{2})\s+\|\s+(\d+)\s+\|\s+(.+?)\s+\|\s+(.+?)\s+\|\s+(\w+)\s+"(.+?)"',
                 line
             )
-            if gin:
-                ts, status, duration, client_ip, method, path = gin.groups()
-                if path.strip() in ['/', '/api/tags', '/api/ps', '/api/version', '/api/show']:
-                    continue
-                dur_str = duration.strip()
-                dur_ms = 0
-                try:
-                    if 'ms' in dur_str:
-                        dur_ms = float(dur_str.replace('ms', '').replace('\u00b5s', '').strip())
-                    elif '\u00b5s' in dur_str:
-                        dur_ms = float(dur_str.replace('\u00b5s', '').strip()) / 1000
-                    elif 's' in dur_str:
-                        parts = dur_str.replace('s', '').strip()
-                        if 'm' in parts:
-                            mp = parts.split('m')
-                            dur_ms = (float(mp[0]) * 60 + float(mp[1])) * 1000
-                        else:
-                            dur_ms = float(parts) * 1000
-                except:
-                    dur_ms = 0
+            if not gin:
+                continue
 
-                try:
-                    dt = datetime.strptime(ts.strip(), "%Y/%m/%d - %H:%M:%S")
-                    iso_time = dt.isoformat()
-                except:
-                    iso_time = ts.strip()
+            ts, status, duration, client_ip, method, path = gin.groups()
 
-                # Find closest token info (look backwards from this line)
-                tokens = 0
-                prompt_tokens = 0
-                for ti_pos in sorted(token_info.keys(), reverse=True):
-                    if ti_pos < i:
-                        tokens = token_info[ti_pos].get("eval_tokens", 0)
-                        prompt_tokens = token_info[ti_pos].get("prompt_tokens", 0)
-                        del token_info[ti_pos]
-                        break
+            # Skip polling/status endpoints
+            if path.strip() in ['/', '/api/tags', '/api/ps', '/api/version', '/api/show']:
+                continue
 
-                entry = {
-                    "time": iso_time,
-                    "time_display": ts.strip(),
-                    "status": int(status.strip()),
-                    "duration": dur_str,
-                    "duration_ms": round(dur_ms, 1),
-                    "client_ip": client_ip.strip(),
-                    "method": method.strip(),
-                    "path": path.strip(),
-                    "tokens": tokens,
-                    "prompt_tokens": prompt_tokens,
-                    "total_tokens": tokens + prompt_tokens
-                }
+            dur_str = duration.strip()
+            dur_ms = parse_duration(dur_str)
 
-                # Dedup check
-                h = entry_hash(entry)
-                if h not in seen_entries:
-                    seen_entries.add(h)
-                    found.append(entry)
-                    if len(seen_entries) > MAX_SEEN:
-                        seen_entries = set(list(seen_entries)[-3000:])
+            try:
+                dt = datetime.strptime(ts.strip(), "%Y/%m/%d - %H:%M:%S")
+                iso_time = dt.isoformat()
+            except:
+                iso_time = ts.strip()
+
+            entry = {
+                "time": iso_time,
+                "time_display": ts.strip(),
+                "status": int(status.strip()),
+                "duration": dur_str,
+                "duration_ms": round(dur_ms, 1),
+                "client_ip": client_ip.strip(),
+                "method": method.strip(),
+                "path": path.strip(),
+                "model": active_model,
+            }
+
+            # Dedup check
+            h = entry_hash(entry)
+            if h not in seen_entries:
+                seen_entries.add(h)
+                found.append(entry)
+                if len(seen_entries) > MAX_SEEN:
+                    seen_entries = set(list(seen_entries)[-3000:])
 
         return found
     except Exception as e:
         return []
 
+# ── Ollama API helpers ───────────────────────────────────────────
+def get_ollama_version():
+    """Get Ollama version from API"""
+    try:
+        resp = requests.get(f"{OLLAMA_URL}/api/version", timeout=3)
+        if resp.ok:
+            return resp.json().get("version", "unknown")
+    except:
+        pass
+    return "unknown"
+
+def get_model_details(ps_data):
+    """Extract detailed model info from /api/ps response"""
+    models = []
+    for m in ps_data.get("models", []):
+        detail = {
+            "name": m.get("name", "unknown"),
+            "size": m.get("size", 0),
+            "size_display": _fmt_bytes(m.get("size", 0)),
+            "size_vram": m.get("size_vram", 0),
+            "size_vram_display": _fmt_bytes(m.get("size_vram", 0)),
+            "digest": m.get("digest", "")[:12],
+            "expires_at": m.get("expires_at", ""),
+        }
+        details = m.get("details", {})
+        if details:
+            detail["family"] = details.get("family", "")
+            detail["parameter_size"] = details.get("parameter_size", "")
+            detail["quantization"] = details.get("quantization_level", "")
+        models.append(detail)
+    return models
+
 # ── Background poller ────────────────────────────────────────────
 last_running = set()
 
 def poll_loop():
-    global current_status, last_running
+    global current_status, last_running, active_model
     while True:
         try:
             ps_resp = requests.get(f"{OLLAMA_URL}/api/ps", timeout=5)
@@ -175,14 +182,28 @@ def poll_loop():
             ps_data = ps_resp.json() if ps_resp.ok else {"models": []}
             tags_data = tags_resp.json() if tags_resp.ok else {"models": []}
 
+            # Track active model name for request history
+            running_models = ps_data.get("models", [])
+            if running_models:
+                active_model = running_models[0].get("name", "—")
+            else:
+                active_model = "—"
+
+            # Get detailed model info and version from API
+            model_details = get_model_details(ps_data)
+            ollama_version = get_ollama_version()
+
             current_status = {
                 "status": "online",
                 "running": ps_data,
                 "models": tags_data,
+                "model_details": model_details,
+                "ollama_version": ollama_version,
+                "active_model": active_model,
                 "polled_at": datetime.now().isoformat()
             }
 
-            current_running = {m.get("name", "unknown") for m in ps_data.get("models", [])}
+            current_running = {m.get("name", "unknown") for m in running_models}
             loaded = current_running - last_running
             unloaded = last_running - current_running
 
@@ -213,6 +234,9 @@ def poll_loop():
                 "status": "offline",
                 "running": {"models": []},
                 "models": {"models": []},
+                "model_details": [],
+                "ollama_version": "unknown",
+                "active_model": "—",
                 "error": str(e),
                 "polled_at": datetime.now().isoformat()
             }
@@ -339,19 +363,17 @@ def api_history_stats():
             file_size = os.path.getsize(HISTORY_FILE)
         except:
             pass
-        total_gen_tokens = sum(r.get("tokens", 0) for r in history.get("requests", []))
-        total_prompt_tokens = sum(r.get("prompt_tokens", 0) for r in history.get("requests", []))
         total_bench_tokens = sum(b.get("eval_count", 0) for b in history.get("benchmarks", []))
-        total_all = total_gen_tokens + total_prompt_tokens + total_bench_tokens
+        total_bench_prompt = sum(b.get("prompt_eval_count", 0) for b in history.get("benchmarks", []))
         return jsonify({
             "requests": len(history.get("requests", [])),
             "benchmarks": len(history.get("benchmarks", [])),
             "events": len(history.get("events", [])),
             "file_size_bytes": file_size,
             "file_size": _fmt_bytes(file_size),
-            "total_tokens": total_all,
-            "total_gen_tokens": total_gen_tokens + total_bench_tokens,
-            "total_prompt_tokens": total_prompt_tokens
+            "total_tokens": total_bench_tokens + total_bench_prompt,
+            "total_gen_tokens": total_bench_tokens,
+            "total_prompt_tokens": total_bench_prompt
         })
 
 def _fmt_bytes(b):
@@ -412,16 +434,12 @@ def api_updates():
 
     results["rebuild_commands"] = {
         "dashboard": [
-            "cd /mnt/user/appdata/ollama-dashboard-build",
-            "docker pull python:3.11-slim",
-            "docker build --no-cache -t ollama-dashboard .",
-            "# Then restart from Unraid Docker tab"
+            "docker pull ghcr.io/ava-agentone/ollama-dashboard:latest",
+            "# Then click Update in Unraid Docker tab"
         ],
         "ollama_intel": [
-            "cd /mnt/user/appdata/ollama-build",
-            "docker pull intelanalytics/ipex-llm-inference-cpp-xpu:latest",
-            "docker build --no-cache -t ollama-intel .",
-            "# Then restart from Unraid Docker tab"
+            "docker pull ghcr.io/ava-agentone/ollama-intel:latest",
+            "# Then click Update in Unraid Docker tab"
         ]
     }
 
@@ -438,7 +456,7 @@ if __name__ == '__main__':
     except:
         pass
     threading.Thread(target=poll_loop, daemon=True).start()
-    print(f"[DASHBOARD] Ollama Monitor v2.2 starting on port 8088")
+    print(f"[DASHBOARD] Ollama Monitor v2.3 starting on port 8088")
     print(f"[DASHBOARD] Monitoring: {OLLAMA_URL}")
     print(f"[DASHBOARD] Container: {OLLAMA_CONTAINER}")
     print(f"[DASHBOARD] History: {HISTORY_FILE}")
