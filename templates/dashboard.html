@@ -429,7 +429,7 @@ tr:hover td { background:var(--glow-1); }
     <div class="stat-card c2">
       <div class="stat-label">Total Tokens</div>
       <div class="stat-value c2" id="totalTokens">0</div>
-      <div class="stat-sub" id="totalTokensSub">All sources</div>
+      <div class="stat-sub" id="totalTokensSub">0 in + 0 out</div>
     </div>
   </div>
 
@@ -486,9 +486,23 @@ tr:hover td { background:var(--glow-1); }
       </div>
       <div class="panel-body" style="padding:0;">
         <div class="scroll-box">
-          <table><thead><tr><th>Time</th><th>Endpoint</th><th>Duration</th><th>Model</th><th>Tokens</th><th>Client</th></tr></thead>
-          <tbody id="histBody"><tr><td colspan="6" class="empty">No requests logged yet</td></tr></tbody></table>
+          <table><thead><tr><th>Time</th><th>Endpoint</th><th>Duration</th><th>Model</th><th>In</th><th>Out</th><th>tok/s</th><th>Client</th></tr></thead>
+          <tbody id="histBody"><tr><td colspan="8" class="empty">No requests logged yet</td></tr></tbody></table>
         </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- tok/s Chart -->
+  <div class="grid-full">
+    <div class="panel">
+      <div class="panel-header">
+        <div class="panel-title">Generation Speed Over Time</div>
+        <div class="panel-badge" id="chartAvgTps">—</div>
+      </div>
+      <div class="panel-body">
+        <canvas id="tpsChart" style="width:100%;height:180px;"></canvas>
+        <div class="empty" id="tpsChartEmpty" style="display:none;">Not enough proxied requests to chart</div>
       </div>
     </div>
   </div>
@@ -690,7 +704,7 @@ async function fetchStatus() {
       if(det.quantization) parts.push(det.quantization);
       if(det.family) parts.push(det.family);
       const vram=m.size_vram||m.size||0;
-      sub.textContent=parts.length>0 ? parts.join(' · ')+' · VRAM: '+fmtBytes(vram) : 'VRAM: '+fmtBytes(vram);
+      sub.textContent=parts.length>0 ? parts.join(' · ') : 'Loaded';
       document.getElementById('gpuMem').textContent=fmtBytes(vram);
       document.getElementById('gpuMemSub').textContent=running.length+' model(s) loaded';
     } else {
@@ -736,12 +750,103 @@ async function fetchHistory() {
     const sd=await sr.json();
     document.getElementById('histFileInfo').textContent=
       `Reqs: ${sd.requests} | Bench: ${sd.benchmarks} | Events: ${sd.events} | File: ${sd.file_size}`;
-    // Update total tokens stat card
-    document.getElementById('totalTokens').textContent=fmtNum(sd.total_tokens||0);
-    const proxied=sd.proxied_requests||0, direct=sd.direct_requests||0;
-    document.getElementById('totalTokensSub').textContent=
-      `${fmtNum(sd.total_gen_tokens||0)} gen + ${fmtNum(sd.total_prompt_tokens||0)} prompt`;
   } catch(e){}
+}
+
+function renderTokChart(reqs) {
+  const canvas = document.getElementById('tpsChart');
+  const emptyMsg = document.getElementById('tpsChartEmpty');
+  const badge = document.getElementById('chartAvgTps');
+  const ctx = canvas.getContext('2d');
+
+  // Filter to only proxied requests with tok/s data
+  const points = reqs.filter(r => r.source==='proxy' && r.tokens_per_sec > 0).reverse();
+
+  if (points.length < 2) {
+    canvas.style.display='none'; emptyMsg.style.display='block';
+    badge.textContent = '—';
+    return;
+  }
+  canvas.style.display='block'; emptyMsg.style.display='none';
+
+  // Resize canvas for sharp rendering
+  const rect = canvas.parentElement.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = rect.width * dpr;
+  canvas.height = 180 * dpr;
+  canvas.style.height = '180px';
+  ctx.scale(dpr, dpr);
+  const W = rect.width, H = 180;
+
+  // Data
+  const values = points.map(p => p.tokens_per_sec);
+  const avg = values.reduce((a,b)=>a+b,0) / values.length;
+  badge.textContent = avg.toFixed(1) + ' avg tok/s';
+
+  const maxV = Math.max(...values) * 1.15;
+  const minV = 0;
+  const pad = { top: 20, right: 16, bottom: 30, left: 48 };
+  const cW = W - pad.left - pad.right;
+  const cH = H - pad.top - pad.bottom;
+
+  ctx.clearRect(0, 0, W, H);
+  const style = getComputedStyle(document.documentElement);
+  const accent = style.getPropertyValue('--accent-1').trim() || '#00ff88';
+  const accent2 = style.getPropertyValue('--accent-4').trim() || '#ff6644';
+  const dimColor = style.getPropertyValue('--text-dim').trim() || '#666';
+  const lineColor = style.getPropertyValue('--border').trim() || '#333';
+
+  // Grid lines
+  ctx.strokeStyle = lineColor; ctx.lineWidth = 0.5;
+  const gridLines = 4;
+  ctx.font = '11px monospace'; ctx.fillStyle = dimColor; ctx.textAlign = 'right';
+  for (let i = 0; i <= gridLines; i++) {
+    const y = pad.top + (cH / gridLines) * i;
+    const val = maxV - (maxV / gridLines) * i;
+    ctx.beginPath(); ctx.moveTo(pad.left, y); ctx.lineTo(W - pad.right, y); ctx.stroke();
+    ctx.fillText(val.toFixed(1), pad.left - 6, y + 4);
+  }
+
+  // Plot line
+  ctx.strokeStyle = accent; ctx.lineWidth = 2; ctx.lineJoin = 'round';
+  ctx.beginPath();
+  for (let i = 0; i < values.length; i++) {
+    const x = pad.left + (i / (values.length - 1)) * cW;
+    const y = pad.top + cH - ((values[i] - minV) / (maxV - minV)) * cH;
+    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  }
+  ctx.stroke();
+
+  // Fill under line
+  const lastX = pad.left + cW;
+  const lastY = pad.top + cH - ((values[values.length-1] - minV) / (maxV - minV)) * cH;
+  ctx.lineTo(lastX, pad.top + cH);
+  ctx.lineTo(pad.left, pad.top + cH);
+  ctx.closePath();
+  const grad = ctx.createLinearGradient(0, pad.top, 0, pad.top + cH);
+  grad.addColorStop(0, accent + '30');
+  grad.addColorStop(1, accent + '05');
+  ctx.fillStyle = grad;
+  ctx.fill();
+
+  // Average line
+  const avgY = pad.top + cH - ((avg - minV) / (maxV - minV)) * cH;
+  ctx.strokeStyle = accent2; ctx.lineWidth = 1; ctx.setLineDash([4,4]);
+  ctx.beginPath(); ctx.moveTo(pad.left, avgY); ctx.lineTo(W - pad.right, avgY); ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.fillStyle = accent2; ctx.textAlign = 'left'; ctx.font = '10px monospace';
+  ctx.fillText('avg ' + avg.toFixed(1), W - pad.right - 50, avgY - 5);
+
+  // X-axis labels (first, middle, last timestamps)
+  ctx.fillStyle = dimColor; ctx.font = '10px monospace'; ctx.textAlign = 'center';
+  const labelIdxs = [0, Math.floor(points.length/2), points.length-1];
+  for (const idx of labelIdxs) {
+    if (idx >= points.length) continue;
+    const x = pad.left + (idx / (values.length - 1)) * cW;
+    const t = points[idx].time || '';
+    const short = t.includes('T') ? t.split('T')[1]?.substring(0,5) : t.substring(11,16);
+    ctx.fillText(short || '', x, H - 8);
+  }
 }
 
 function renderHistory() {
@@ -750,23 +855,37 @@ function renderHistory() {
   document.getElementById('totalReqsSub').textContent=reqs.length+' tracked';
   document.getElementById('histBadge').textContent=reqs.length;
 
+  // Filtered token totals
+  const filteredIn = reqs.reduce((s,r)=>s+(r.prompt_tokens||0),0);
+  const filteredOut = reqs.reduce((s,r)=>s+(r.tokens||0),0);
+  document.getElementById('totalTokens').textContent=fmtNum(filteredIn+filteredOut);
+  document.getElementById('totalTokensSub').textContent=
+    `${fmtNum(filteredIn)} in + ${fmtNum(filteredOut)} out`;
+
   const hb=document.getElementById('histBody');
-  if(!reqs.length){ hb.innerHTML='<tr><td colspan="6" class="empty">No requests in this period</td></tr>'; }
+  if(!reqs.length){ hb.innerHTML='<tr><td colspan="8" class="empty">No requests in this period</td></tr>'; }
   else {
     hb.innerHTML=reqs.slice(0,300).map(r=>{
       const modelDisplay = r.model || '—';
-      const tokDisplay = (r.total_tokens && r.total_tokens > 0) ? r.total_tokens : '—';
+      const inTok = (r.prompt_tokens && r.prompt_tokens > 0) ? r.prompt_tokens : '—';
+      const outTok = (r.tokens && r.tokens > 0) ? r.tokens : '—';
+      const tps = (r.tokens_per_sec && r.tokens_per_sec > 0) ? r.tokens_per_sec.toFixed(1) : '—';
       const srcTag = r.source==='proxy' ? '⬡' : '';
       return `<tr>
         <td class="td-dim">${fmtTime(r.time)}</td>
         <td class="td-name">${r.path||'—'}</td>
         <td class="td-dur">${r.duration||'—'}</td>
         <td class="td-model">${modelDisplay}</td>
-        <td class="td-tok">${tokDisplay}</td>
+        <td class="td-tok">${inTok}</td>
+        <td class="td-tok">${outTok}</td>
+        <td class="td-dur">${tps}</td>
         <td class="td-dim">${r.client_ip||'—'} ${srcTag}</td>
       </tr>`;
     }).join('');
   }
+
+  // Render tok/s over time chart
+  renderTokChart(reqs);
 
   // Events
   const events=(allHistory.events||[]).slice().reverse();

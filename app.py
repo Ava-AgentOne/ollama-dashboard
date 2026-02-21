@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Ollama Intel iGPU Monitoring Dashboard v2.4 — Backend + API Proxy"""
+"""Ollama Intel iGPU Monitoring Dashboard v2.5 — Backend + API Proxy"""
 
 from flask import Flask, jsonify, render_template, request as flask_request, Response
 import requests
@@ -201,10 +201,10 @@ def _fmt_duration(ms):
         return f"{ms:.0f}ms"
     s = ms / 1000
     if s < 60:
-        return f"{s:.1f}s"
+        return f"{int(round(s))}s"
     m = int(s // 60)
-    s = s % 60
-    return f"{m}m{s:.0f}s"
+    s = int(round(s % 60))
+    return f"{m}m{s}s"
 
 # ══════════════════════════════════════════════════════════════════
 #  OLLAMA API PROXY — runs on port 11434
@@ -268,6 +268,8 @@ def proxy_handler(path):
                 eval_tokens = 0
                 prompt_tokens = 0
                 tok_per_sec = 0
+                prompt_tok_per_sec = 0
+                done_reason = ""
 
                 try:
                     lines = accumulated.decode('utf-8', errors='replace').strip().split('\n')
@@ -278,8 +280,12 @@ def proxy_handler(path):
                                 eval_tokens = data.get('eval_count', 0)
                                 prompt_tokens = data.get('prompt_eval_count', 0)
                                 eval_dur = data.get('eval_duration', 0)
+                                prompt_dur = data.get('prompt_eval_duration', 0)
+                                done_reason = data.get('done_reason', '')
                                 if eval_dur > 0:
                                     tok_per_sec = round(eval_tokens / max(eval_dur / 1e9, 0.001), 2)
+                                if prompt_dur > 0:
+                                    prompt_tok_per_sec = round(prompt_tokens / max(prompt_dur / 1e9, 0.001), 2)
                                 model_name = data.get('model', model_name)
                                 break
                         except:
@@ -301,6 +307,8 @@ def proxy_handler(path):
                     "prompt_tokens": prompt_tokens,
                     "total_tokens": eval_tokens + prompt_tokens,
                     "tokens_per_sec": tok_per_sec,
+                    "prompt_tok_per_sec": prompt_tok_per_sec,
+                    "done_reason": done_reason,
                     "source": "proxy",
                 }
                 log_request(entry)
@@ -319,6 +327,8 @@ def proxy_handler(path):
             eval_tokens = 0
             prompt_tokens = 0
             tok_per_sec = 0
+            prompt_tok_per_sec = 0
+            done_reason = ""
 
             try:
                 data = json.loads(resp_data)
@@ -326,8 +336,12 @@ def proxy_handler(path):
                 eval_tokens = data.get('eval_count', 0)
                 prompt_tokens = data.get('prompt_eval_count', 0)
                 eval_dur = data.get('eval_duration', 0)
+                prompt_dur = data.get('prompt_eval_duration', 0)
+                done_reason = data.get('done_reason', '')
                 if eval_dur > 0:
                     tok_per_sec = round(eval_tokens / max(eval_dur / 1e9, 0.001), 2)
+                if prompt_dur > 0:
+                    prompt_tok_per_sec = round(prompt_tokens / max(prompt_dur / 1e9, 0.001), 2)
             except:
                 pass
 
@@ -345,6 +359,8 @@ def proxy_handler(path):
                 "prompt_tokens": prompt_tokens,
                 "total_tokens": eval_tokens + prompt_tokens,
                 "tokens_per_sec": tok_per_sec,
+                "prompt_tok_per_sec": prompt_tok_per_sec,
+                "done_reason": done_reason,
                 "source": "proxy",
             }
             log_request(entry)
@@ -686,7 +702,7 @@ if __name__ == '__main__':
     threading.Thread(target=run_proxy, daemon=True).start()
 
     # Start dashboard on port 8088
-    print(f"[DASHBOARD] Ollama Monitor v2.4 starting on port 8088")
+    print(f"[DASHBOARD] Ollama Monitor v2.5 starting on port 8088")
     print(f"[DASHBOARD] Monitoring: {OLLAMA_URL}")
     print(f"[DASHBOARD] Container: {OLLAMA_CONTAINER}")
     print(f"[DASHBOARD] History: {HISTORY_FILE}")
