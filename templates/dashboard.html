@@ -853,6 +853,7 @@ docker build --no-cache -t ollama-intel .
       </div>
       <div style="display:flex;gap:8px;margin-top:14px;">
         <button class="btn" onclick="exportHistory()">Export History</button>
+        <button class="btn" onclick="generateSnapshot()">📸 Snapshot</button>
         <button class="btn err" onclick="clearHistory()">Clear All</button>
       </div>
     </div>
@@ -1762,6 +1763,159 @@ async function exportHistory() {
     a.click(); URL.revokeObjectURL(u);
     showToast('Exported');
   } catch(e){showToast('Export failed',true);}
+}
+
+// ── Snapshot Card Generator ─────────────────────────────────
+function generateSnapshot() {
+  const reqs = allHistory.requests || [];
+  const events = allHistory.events || [];
+  const benches = allHistory.benchmarks || [];
+
+  // Gather stats
+  const totalReqs = reqs.length;
+  const totalTokens = reqs.reduce((s,r) => s + (r.total_tokens||0), 0);
+  const tpsVals = reqs.filter(r => r.tokens_per_sec > 0).map(r => r.tokens_per_sec);
+  const avgTps = tpsVals.length ? (tpsVals.reduce((a,b)=>a+b,0)/tpsVals.length).toFixed(1) : '—';
+  const peakTps = tpsVals.length ? Math.max(...tpsVals).toFixed(1) : '—';
+  const models = [...new Set(reqs.map(r=>r.model).filter(Boolean))];
+  const topModel = models.length ? (() => {
+    const counts = {};
+    reqs.forEach(r => { if(r.model) counts[r.model] = (counts[r.model]||0)+1; });
+    return Object.entries(counts).sort((a,b)=>b[1]-a[1])[0][0];
+  })() : '—';
+  const clients = [...new Set(reqs.map(r=>r.client_ip).filter(Boolean))];
+  const totalEvents = events.length;
+  const totalBenches = benches.length;
+
+  // Canvas setup
+  const W = 680, H = 420;
+  const c = document.createElement('canvas');
+  c.width = W; c.height = H;
+  const ctx = c.getContext('2d');
+  const dpr = window.devicePixelRatio || 1;
+  c.width = W * dpr; c.height = H * dpr;
+  c.style.width = W + 'px'; c.style.height = H + 'px';
+  ctx.scale(dpr, dpr);
+
+  // Background
+  const bgGrad = ctx.createLinearGradient(0, 0, 0, H);
+  bgGrad.addColorStop(0, '#060a0e');
+  bgGrad.addColorStop(1, '#0c1520');
+  ctx.fillStyle = bgGrad;
+  roundRect(ctx, 0, 0, W, H, 12);
+  ctx.fill();
+
+  // Border
+  ctx.strokeStyle = '#1a2736';
+  ctx.lineWidth = 1;
+  roundRect(ctx, 0.5, 0.5, W-1, H-1, 12);
+  ctx.stroke();
+
+  // Accent bar
+  const barGrad = ctx.createLinearGradient(0, 0, W, 0);
+  barGrad.addColorStop(0, '#00e87b');
+  barGrad.addColorStop(1, '#00b4d8');
+  ctx.fillStyle = barGrad;
+  ctx.fillRect(24, 20, 4, 32);
+
+  // Title
+  ctx.fillStyle = '#c8d4de';
+  ctx.font = '600 20px "Share Tech Mono", monospace';
+  ctx.fillText('OLLAMA // CONTROL CENTER', 40, 43);
+
+  // Subtitle
+  ctx.fillStyle = '#3a4a5a';
+  ctx.font = '12px "JetBrains Mono", monospace';
+  const now = new Date();
+  ctx.fillText(`Stats snapshot — ${now.toLocaleDateString()} ${now.toLocaleTimeString()}`, 40, 62);
+
+  // Stats grid (2 cols × 4 rows)
+  const stats = [
+    { label: 'TOTAL REQUESTS', value: totalReqs.toLocaleString(), icon: '📊' },
+    { label: 'TOTAL TOKENS', value: totalTokens.toLocaleString(), icon: '🔤' },
+    { label: 'AVG TOK/S', value: avgTps, icon: '⚡' },
+    { label: 'PEAK TOK/S', value: peakTps, icon: '🚀' },
+    { label: 'TOP MODEL', value: shortModel(topModel), icon: '🧠' },
+    { label: 'MODELS USED', value: models.length.toString(), icon: '📦' },
+    { label: 'ACTIVE CLIENTS', value: clients.length.toString(), icon: '🖥️' },
+    { label: 'MODEL EVENTS', value: totalEvents.toString(), icon: '📡' },
+  ];
+
+  const colW = (W - 48 - 16) / 2;
+  const rowH = 62;
+  const startY = 84;
+
+  stats.forEach((s, i) => {
+    const col = i % 2;
+    const row = Math.floor(i / 2);
+    const x = 24 + col * (colW + 16);
+    const y = startY + row * rowH;
+
+    // Card bg
+    ctx.fillStyle = 'rgba(12,17,23,0.7)';
+    roundRect(ctx, x, y, colW, 52, 6);
+    ctx.fill();
+    ctx.strokeStyle = '#1a2736';
+    ctx.lineWidth = 0.5;
+    roundRect(ctx, x, y, colW, 52, 6);
+    ctx.stroke();
+
+    // Icon
+    ctx.font = '16px serif';
+    ctx.fillText(s.icon, x + 10, y + 32);
+
+    // Value
+    ctx.fillStyle = '#00e87b';
+    ctx.font = '600 18px "JetBrains Mono", monospace';
+    ctx.fillText(s.value, x + 34, y + 28);
+
+    // Label
+    ctx.fillStyle = '#3a4a5a';
+    ctx.font = '10px "JetBrains Mono", monospace';
+    ctx.fillText(s.label, x + 34, y + 44);
+  });
+
+  // Footer
+  const footY = H - 28;
+  ctx.fillStyle = '#1a2736';
+  ctx.fillRect(24, footY - 8, W - 48, 1);
+  ctx.fillStyle = '#2a3a4a';
+  ctx.font = '11px "JetBrains Mono", monospace';
+  ctx.fillText(`v1.0 • ${totalBenches} benchmarks • Powered by Intel iGPU + IPEX-LLM`, 24, footY + 8);
+
+  // Watermark
+  ctx.fillStyle = '#1a2736';
+  ctx.font = '10px "JetBrains Mono", monospace';
+  ctx.textAlign = 'right';
+  ctx.fillText('ollama-dashboard', W - 24, footY + 8);
+  ctx.textAlign = 'left';
+
+  // Download
+  const link = document.createElement('a');
+  link.download = `ollama-snapshot-${now.toISOString().slice(0,10)}.png`;
+  link.href = c.toDataURL('image/png');
+  link.click();
+  showToast('Snapshot saved');
+}
+
+function shortModel(name) {
+  if (!name || name === '—') return '—';
+  // Truncate long model names
+  return name.length > 22 ? name.slice(0, 20) + '…' : name;
+}
+
+function roundRect(ctx, x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + w - r, y);
+  ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+  ctx.lineTo(x + w, y + h - r);
+  ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+  ctx.lineTo(x + r, y + h);
+  ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+  ctx.lineTo(x, y + r);
+  ctx.quadraticCurveTo(x, y, x + r, y);
+  ctx.closePath();
 }
 
 // ── Settings ─────────────────────────────────────────────────
