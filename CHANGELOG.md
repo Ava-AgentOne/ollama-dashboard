@@ -16,12 +16,20 @@ All notable changes to ollama-dashboard will be documented in this file.
   - Proxy endpoint documentation
   - Auth endpoint docs (shown only when auth is enabled)
 - **Login page** — styled to match dashboard theme with animated logo
+- **Snapshot card** — 📸 button generates branded PNG stats card (Canvas API, no dependencies)
+  - 8-stat grid: requests, tokens, avg/peak tok/s, top model, models, clients, events
+  - Downloads as `ollama-snapshot-YYYY-MM-DD.png`
 
 ### Changed
 - Version bump to v1.0 — production ready
 - Settings API returns `auth_enabled` flag for UI state
 - Unraid template includes `DASHBOARD_PASSWORD` and `SECRET_KEY` config
 - All API routes return 401 JSON when unauthenticated
+- Trim/export/clear controls moved from dashboard footer into Settings → Data Management
+
+### Fixed
+- **Chart flickering** — charts only re-render when history data actually changes (hash comparison)
+- **Settings save error** — fixed wrong `request` object (`request` → `flask_request`)
 
 ## [v0.9] - 2026-02-21
 
