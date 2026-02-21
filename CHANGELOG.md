@@ -10,7 +10,7 @@ All notable changes to ollama-dashboard will be documented in this file.
   - Full token tracking: eval_count, prompt_eval_count, tokens/sec for all proxied requests
   - Supports both streaming and non-streaming responses
   - Auto-detects own IP to avoid duplicate entries with GIN log parsing
-- Request history now shows both **Model** and **Tokens** columns
+- Request history now shows **Model** and **Tokens** columns
 - ⬡ indicator in Client column for proxied requests
 - Proxy port displayed in dashboard header
 - Total Tokens stat card now includes tokens from proxied requests + benchmarks
@@ -19,6 +19,13 @@ All notable changes to ollama-dashboard will be documented in this file.
 ### Changed
 - "Bench Tokens" card renamed back to "Total Tokens" (proxy enables full token tracking again)
 - GIN log parser filters out proxy-originated requests to avoid duplicates
+
+### Removed
+- **Status column** removed from Request History table
+
+### Fixed
+- Streaming proxy: raw byte passthrough instead of iter_lines() which broke chunked responses
+- Proxy request context: captured Flask request vars before generator to prevent `RuntimeError: Working outside of request context`
 
 ## [v2.3] - 2026-02-21
 
