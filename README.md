@@ -91,6 +91,8 @@ docker run -d \
 
 > Replace `<YOUR_IP>` with a free static IP on your LAN, and `<OLLAMA_IP>` with the IP of your Ollama container.
 
+> ⚠️ **Networking Note**: If your Ollama container runs on br0 (macvlan), the dashboard must also be on br0. Linux hosts cannot reach their own macvlan containers — so using `host` networking for the dashboard while Ollama is on br0 will result in "No route to host" errors.
+
 ### Unraid Private Apps (Recommended)
 
 Add all Ava-AgentOne containers to your Unraid **Apps** tab:
