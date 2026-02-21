@@ -91,23 +91,24 @@ docker run -d \
 
 > Replace `<YOUR_IP>` with a free static IP on your LAN, and `<OLLAMA_IP>` with the IP of your Ollama container.
 
-### Unraid App Store (Recommended)
+### Unraid Private Apps (Recommended)
 
-Add all Ava-AgentOne containers to your Unraid Apps tab with one link:
+Add all Ava-AgentOne containers to your Unraid **Apps** tab:
 
-1. In Unraid, go to **Apps** → **Settings** (bottom-left)
-2. In **Template Repositories**, add this URL on a new line:
+1. Run in your Unraid terminal:
+   ```bash
+   mkdir -p /boot/config/plugins/community.applications/private/Ava-AgentOne
+   curl -o /boot/config/plugins/community.applications/private/Ava-AgentOne/ollama-dashboard.xml \
+     https://raw.githubusercontent.com/Ava-AgentOne/unraid-templates/main/ollama-dashboard.xml
    ```
-   https://github.com/Ava-AgentOne/unraid-templates
-   ```
-3. Click **Apply** — the container will now appear in your **Apps** tab
-4. Search for **ollama-dashboard**, click **Install**, configure your settings, and click **Apply**
+2. Go to **Apps** tab → **Private Apps** in the left sidebar
+3. Click **Install**, configure your settings, and click **Apply**
 
-> 💡 This repo includes templates for all [Ava-AgentOne](https://github.com/Ava-AgentOne) Unraid containers.
+> 💡 See [unraid-templates](https://github.com/Ava-AgentOne/unraid-templates) for an auto-sync script that keeps templates updated.
 
 ### Unraid Template (Manual Install)
 
-Alternatively, add the template directly:
+Alternatively, paste the template URL directly in Unraid:
 
 1. In Unraid, go to **Docker** → **Add Container** → **Template** dropdown → paste this URL:
    ```
