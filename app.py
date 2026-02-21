@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Ollama Intel iGPU Monitoring Dashboard v0.8 — Backend + API Proxy"""
+"""Ollama Intel iGPU Monitoring Dashboard v0.9 — Backend + API Proxy"""
 
 from flask import Flask, jsonify, render_template, request as flask_request, Response
 import requests
@@ -499,6 +499,14 @@ def poll_loop():
 def dashboard():
     return render_template('dashboard.html')
 
+@app.route('/sw.js')
+def service_worker():
+    return app.send_static_file('sw.js')
+
+@app.route('/manifest.json')
+def manifest():
+    return app.send_static_file('manifest.json')
+
 @app.route('/api/client-map')
 def api_client_map():
     return jsonify(get_client_map())
@@ -768,7 +776,7 @@ if __name__ == '__main__':
     threading.Thread(target=run_proxy, daemon=True).start()
 
     # Start dashboard on port 8088
-    print(f"[DASHBOARD] Ollama Monitor v0.8 starting on port 8088")
+    print(f"[DASHBOARD] Ollama Monitor v0.9 starting on port 8088")
     print(f"[DASHBOARD] Monitoring: {OLLAMA_URL}")
     print(f"[DASHBOARD] Container: {OLLAMA_CONTAINER}")
     print(f"[DASHBOARD] History: {HISTORY_FILE}")

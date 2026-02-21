@@ -2,6 +2,29 @@
 
 All notable changes to ollama-dashboard will be documented in this file.
 
+## [v0.9] - 2026-02-21
+
+### Added
+- **PWA support** — installable as a standalone app on mobile and desktop
+  - Web app manifest with icons (192px, 512px)
+  - Service worker with network-first caching for offline shell
+  - Apple touch icon and iOS standalone mode
+  - "Add to Home Screen" support on Android and iOS
+- **Collapsible panels** — click any panel header to collapse/expand (persists per session)
+- **Responsive mobile layout** at 3 breakpoints:
+  - **≤900px** (tablet): single column grids, wrapped header
+  - **≤600px** (phone): compact stats, hidden Duration/Quant columns, stacked settings, smaller fonts
+  - **≤400px** (small phone): tighter spacing, single-column popups
+- **Touch-friendly popup** — full-width on mobile, single-column grid
+- **Hidden columns** — Duration and Quant columns auto-hide on mobile (full details in popup)
+
+### Changed
+- Viewport meta tag updated with `viewport-fit=cover` for notched phones
+- Chart toolbar wraps cleanly on narrow screens
+- Controls bar stacks vertically on mobile
+- Settings rows stack vertically on mobile for easier input
+- Filter buttons and nav tabs compact on small screens
+
 ## [v0.8] - 2026-02-21
 
 ### Added
