@@ -249,14 +249,12 @@ def proxy_handler(path):
             timeout=600
         )
 
-        # Build response headers
-        resp_headers = {}
-        for k, v in ollama_resp.headers.items():
-            if k.lower() not in ('transfer-encoding', 'connection', 'content-encoding'):
-                resp_headers[k] = v
-
         if is_trackable and is_streaming:
             # ── Streaming: pass through chunks, capture final stats ──
+            # Strip content-length — Flask will use chunked encoding for generators
+            stream_headers = {k: v for k, v in ollama_resp.headers.items()
+                             if k.lower() not in ('connection', 'content-encoding', 'content-length', 'transfer-encoding')}
+
             def stream_and_capture():
                 model_name = body_json.get('model', '—') if body_json else '—'
                 final_stats = {}
@@ -296,11 +294,14 @@ def proxy_handler(path):
                 }
                 log_request(entry)
 
-            return Response(stream_and_capture(), status=ollama_resp.status_code, headers=resp_headers)
+            return Response(stream_and_capture(), status=ollama_resp.status_code, headers=stream_headers,
+                           content_type='application/x-ndjson')
 
         elif is_trackable and not is_streaming:
             # ── Non-streaming: read full response, capture stats ──
             resp_data = ollama_resp.content
+            nonstream_headers = {k: v for k, v in ollama_resp.headers.items()
+                                if k.lower() not in ('connection', 'content-encoding', 'transfer-encoding')}
             elapsed_ms = (time.time() - start_ts) * 1000
 
             try:
@@ -334,16 +335,19 @@ def proxy_handler(path):
             }
             log_request(entry)
 
-            return Response(resp_data, status=ollama_resp.status_code, headers=resp_headers)
+            return Response(resp_data, status=ollama_resp.status_code, headers=nonstream_headers)
 
         else:
             # ── Non-trackable: pure passthrough ──
+            pass_headers = {k: v for k, v in ollama_resp.headers.items()
+                           if k.lower() not in ('connection', 'content-encoding', 'transfer-encoding', 'content-length')}
+
             def passthrough():
                 for chunk in ollama_resp.iter_content(chunk_size=8192):
                     if chunk:
                         yield chunk
 
-            return Response(passthrough(), status=ollama_resp.status_code, headers=resp_headers)
+            return Response(passthrough(), status=ollama_resp.status_code, headers=pass_headers)
 
     except requests.exceptions.ConnectionError:
         return jsonify({"error": "Cannot connect to Ollama"}), 502
