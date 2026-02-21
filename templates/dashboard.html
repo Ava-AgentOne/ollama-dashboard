@@ -333,9 +333,46 @@ tr:hover td { background:var(--glow-1); }
 .event-tag { font-size:14px; letter-spacing:1px; text-transform:uppercase; padding:2px 6px; border-radius:2px; font-weight:600; }
 .event-tag.load { background:var(--glow-1); color:var(--accent-1); }
 .event-tag.unload { background:var(--glow-2); color:var(--accent-2); }
+.event-tag.warning { background:rgba(255,160,40,0.15); color:var(--accent-2); }
+.event-icon { font-size:14px; min-width:20px; text-align:center; }
 .event-model { color:var(--accent-3); }
+.event-detail { color:var(--text-muted); font-size:12px; }
 
 /* ── Controls bar ────────────────────────────────────────────── */
+
+/* ── Settings page ─────────────────────────────────────────── */
+.settings-grid { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+.settings-section {
+  background:var(--bg-panel); border:1px solid var(--border);
+  border-radius:var(--radius); padding:16px; overflow:hidden;
+}
+.settings-section h3 {
+  font-size:13px; letter-spacing:2px; text-transform:uppercase;
+  color:var(--text-dim); margin-bottom:14px; padding-bottom:8px; border-bottom:1px solid var(--border);
+}
+.setting-row {
+  display:flex; align-items:center; justify-content:space-between;
+  padding:8px 0; border-bottom:1px solid rgba(0,0,0,0.04);
+}
+.setting-row:last-child { border-bottom:none; }
+.setting-label { font-size:13px; color:var(--text-dim); }
+.setting-label small { display:block; font-size:11px; color:var(--text-muted); margin-top:2px; }
+.client-map-list { margin-top:8px; }
+.client-map-row {
+  display:flex; align-items:center; gap:6px; padding:5px 0;
+  border-bottom:1px solid rgba(0,0,0,0.04); font-size:13px;
+}
+.client-map-row .input { flex:1; font-size:12px; padding:4px 6px; }
+.client-map-row .input.ip { max-width:120px; }
+.client-map-row .input.icon { max-width:40px; text-align:center; }
+.client-map-row .input.name { flex:2; }
+.btn-sm {
+  font-size:11px; padding:3px 8px; border:1px solid var(--border);
+  background:transparent; color:var(--text-dim); border-radius:var(--radius);
+  cursor:pointer; transition:all 0.2s;
+}
+.btn-sm:hover { border-color:var(--accent-1); color:var(--accent-1); }
+.btn-sm.err:hover { border-color:var(--accent-err); color:var(--accent-err); }
 
 /* ── Chart toolbar ──────────────────────────────────────────── */
 .chart-toolbar {
@@ -400,6 +437,7 @@ tr:hover td { background:var(--glow-1); }
 /* ── Responsive ──────────────────────────────────────────────── */
 @media(max-width:900px) {
   .grid-2{grid-template-columns:1fr}
+  .settings-grid{grid-template-columns:1fr}
   .stats-row{grid-template-columns:repeat(2,1fr)}
   .header{flex-direction:column;gap:8px}
 }
@@ -417,6 +455,7 @@ tr:hover td { background:var(--glow-1); }
     <div class="nav-tabs">
       <button class="nav-tab active" onclick="showPage('dashboard',this)">Dashboard</button>
       <button class="nav-tab" onclick="showPage('updates',this)">Updates</button>
+      <button class="nav-tab" onclick="showPage('settings',this)">Settings</button>
     </div>
     <div class="theme-controls">
       <select class="theme-select" id="themeSelect" onchange="setTheme(this.value)">
@@ -634,6 +673,62 @@ docker build --no-cache -t ollama-intel .
   </div>
   <div style="margin-top:14px;">
     <button class="btn" id="updateBtn" onclick="checkUpdates()">⟳ Check for Updates</button>
+  </div>
+</div>
+
+<!-- ════════ PAGE: SETTINGS ════════ -->
+<div class="page" id="page-settings">
+  <div class="settings-grid">
+    <!-- Client Mapping -->
+    <div class="settings-section" style="grid-column:1/-1;">
+      <h3>Client Mapping</h3>
+      <p style="font-size:12px;color:var(--text-muted);margin-bottom:10px;">Map client IPs to friendly names with emoji icons. These appear in request history and charts.</p>
+      <div class="client-map-list" id="clientMapList"></div>
+      <div style="margin-top:8px;display:flex;gap:6px;">
+        <button class="btn-sm" onclick="addClientRow()">+ Add Client</button>
+      </div>
+    </div>
+
+    <!-- Poll & Retention -->
+    <div class="settings-section">
+      <h3>Polling & Data</h3>
+      <div class="setting-row">
+        <div class="setting-label">Poll Interval<small>How often to check Ollama status (seconds)</small></div>
+        <input type="number" class="input input-sm" id="setPollInterval" min="1" max="60" value="5">
+      </div>
+      <div class="setting-row">
+        <div class="setting-label">Auto-trim Retention<small>Auto-delete history older than this</small></div>
+        <select class="input" id="setRetention" style="font-size:12px;padding:4px 8px;">
+          <option value="0">Disabled</option>
+          <option value="1">1 month</option>
+          <option value="3">3 months</option>
+          <option value="6" selected>6 months</option>
+          <option value="12">12 months</option>
+          <option value="24">24 months</option>
+        </select>
+      </div>
+    </div>
+
+    <!-- Appearance -->
+    <div class="settings-section">
+      <h3>Appearance</h3>
+      <div class="setting-row">
+        <div class="setting-label">Save theme to server<small>Theme/mode persists across browsers</small></div>
+        <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
+          <input type="checkbox" id="setSyncTheme" style="cursor:pointer;">
+          <span style="font-size:12px;color:var(--text-dim);">Sync</span>
+        </label>
+      </div>
+      <div class="setting-row">
+        <div class="setting-label">Dashboard version</div>
+        <span style="font-size:13px;color:var(--accent-3);">v0.8</span>
+      </div>
+    </div>
+  </div>
+
+  <div style="margin-top:14px;display:flex;gap:8px;">
+    <button class="btn" onclick="saveSettings()">Save Settings</button>
+    <button class="btn c2" onclick="loadSettingsUI()">Reset</button>
   </div>
 </div>
 </div>
@@ -1319,11 +1414,18 @@ function renderHistory() {
   const eb=document.getElementById('eventsBody');
   if(!events.length){ eb.innerHTML='<div class="empty">No events recorded yet</div>'; }
   else {
-    eb.innerHTML=events.slice(0,100).map(e=>`<div class="event-line">
-      <span class="event-time">${fmtTime(e.time)}</span>
-      <span class="event-tag ${e.type}">${e.type}</span>
-      <span class="event-model">${e.model||'—'}</span>
-    </div>`).join('');
+    const eventIcons = { load:'🟢', unload:'🔴', warning:'⚠️', error:'❌' };
+    eb.innerHTML=events.slice(0,100).map(e=>{
+      const icon = eventIcons[e.type] || '⚪';
+      const detail = e.detail ? `<span class="event-detail">${e.detail}</span>` : '';
+      return `<div class="event-line">
+        <span class="event-icon">${icon}</span>
+        <span class="event-time">${fmtTime(e.time)}</span>
+        <span class="event-tag ${e.type}">${e.type}</span>
+        <span class="event-model">${e.model||'—'}</span>
+        ${detail}
+      </div>`;
+    }).join('');
   }
 
   // Benchmarks
@@ -1444,6 +1546,109 @@ async function exportHistory() {
   } catch(e){showToast('Export failed',true);}
 }
 
+// ── Settings ─────────────────────────────────────────────────
+let settingsData = {};
+
+async function loadSettingsUI() {
+  try {
+    const r = await fetch(`${API}/api/settings`);
+    settingsData = await r.json();
+
+    document.getElementById('setPollInterval').value = settingsData.poll_interval || 5;
+    document.getElementById('setRetention').value = settingsData.retention_months || 6;
+    document.getElementById('setSyncTheme').checked = settingsData.sync_theme || false;
+
+    renderClientMapEditor(settingsData.client_map || {});
+
+    // If sync theme is on, apply server-saved theme
+    if (settingsData.sync_theme && settingsData.theme && settingsData.mode) {
+      document.documentElement.setAttribute('data-theme', settingsData.theme);
+      document.documentElement.setAttribute('data-mode', settingsData.mode);
+      document.getElementById('themeSelect').value = settingsData.theme;
+      document.getElementById('modeLabel').textContent = settingsData.mode.toUpperCase();
+    }
+  } catch(e) { console.error('Settings load error', e); }
+}
+
+function renderClientMapEditor(map) {
+  const list = document.getElementById('clientMapList');
+  const entries = Object.entries(map);
+  if (entries.length === 0) {
+    list.innerHTML = '<div style="font-size:12px;color:var(--text-muted);padding:8px 0;">No client mappings configured. Click "+ Add Client" to start.</div>';
+    return;
+  }
+  list.innerHTML = entries.map(([ip, info], i) =>
+    `<div class="client-map-row" data-idx="${i}">
+      <input class="input icon cm-icon" value="${info.icon||'🤖'}" placeholder="🤖" maxlength="4">
+      <input class="input ip cm-ip" value="${ip}" placeholder="IP address">
+      <input class="input name cm-name" value="${info.name||''}" placeholder="Friendly name">
+      <button class="btn-sm err" onclick="this.parentElement.remove()">✕</button>
+    </div>`
+  ).join('');
+}
+
+function addClientRow() {
+  const list = document.getElementById('clientMapList');
+  // Remove "no mappings" message if present
+  if (list.querySelector('div[style]') && !list.querySelector('.client-map-row')) {
+    list.innerHTML = '';
+  }
+  const row = document.createElement('div');
+  row.className = 'client-map-row';
+  row.innerHTML = `
+    <input class="input icon cm-icon" value="🤖" placeholder="🤖" maxlength="4">
+    <input class="input ip cm-ip" value="" placeholder="IP address">
+    <input class="input name cm-name" value="" placeholder="Friendly name">
+    <button class="btn-sm err" onclick="this.parentElement.remove()">✕</button>
+  `;
+  list.appendChild(row);
+}
+
+function collectClientMap() {
+  const map = {};
+  document.querySelectorAll('.client-map-row').forEach(row => {
+    const ip = row.querySelector('.cm-ip')?.value.trim();
+    const name = row.querySelector('.cm-name')?.value.trim();
+    const icon = row.querySelector('.cm-icon')?.value.trim() || '🤖';
+    if (ip && name) map[ip] = { name, icon };
+  });
+  return map;
+}
+
+async function saveSettings() {
+  const payload = {
+    poll_interval: parseInt(document.getElementById('setPollInterval').value) || 5,
+    retention_months: parseInt(document.getElementById('setRetention').value) || 6,
+    client_map: collectClientMap(),
+    sync_theme: document.getElementById('setSyncTheme').checked,
+  };
+
+  // If sync theme is on, save current theme/mode
+  if (payload.sync_theme) {
+    payload.theme = document.documentElement.getAttribute('data-theme');
+    payload.mode = document.documentElement.getAttribute('data-mode');
+  }
+
+  try {
+    const r = await fetch(`${API}/api/settings`, {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(payload)
+    });
+    const d = await r.json();
+    if (d.ok) {
+      showToast('Settings saved');
+      // Reload client map
+      await loadClientMap();
+      renderHistory();
+    } else {
+      showToast('Save failed', true);
+    }
+  } catch(e) { showToast('Save failed: '+e.message, true); }
+}
+
+// Load settings on startup
+loadSettingsUI();
+
 // ── Update Checker ───────────────────────────────────────────
 async function checkUpdates() {
   const btn=document.getElementById('updateBtn');
@@ -1479,8 +1684,12 @@ async function checkUpdates() {
 
 // ── Polling ──────────────────────────────────────────────────
 async function poll() { await fetchStatus(); await fetchHistory(); }
-poll();
-setInterval(poll, 5000);
+async function startPolling() {
+  await poll();
+  const interval = (settingsData.poll_interval || 5) * 1000;
+  setInterval(poll, Math.max(interval, 2000));
+}
+startPolling();
 </script>
 </body>
 </html>
