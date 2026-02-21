@@ -528,7 +528,7 @@ def api_settings_get():
 
 @app.route('/api/settings', methods=['POST'])
 def api_settings_save():
-    data = request.get_json(force=True)
+    data = flask_request.get_json(force=True)
     settings = load_settings()
     allowed = ['poll_interval', 'client_map', 'retention_months', 'theme', 'mode', 'sync_theme']
     for k in allowed:
