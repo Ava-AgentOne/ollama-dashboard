@@ -2,7 +2,7 @@
 
 All notable changes to ollama-dashboard will be documented in this file.
 
-## [v2.5] - 2026-02-21
+## [v0.5] - 2026-02-21
 
 ### Added
 - **In/Out token columns** in Request History (prompt tokens + generated tokens per request)
@@ -18,7 +18,7 @@ All notable changes to ollama-dashboard will be documented in this file.
 ### Removed
 - Removed redundant VRAM display from Active Model subtitle
 
-## [v2.4] - 2026-02-21
+## [v0.4] - 2026-02-21
 
 ### Added
 - **Ollama API Proxy** on port 11434 — transparent proxy that captures token stats from every request
@@ -43,7 +43,7 @@ All notable changes to ollama-dashboard will be documented in this file.
 - Streaming proxy: raw byte passthrough instead of iter_lines() which broke chunked responses
 - Proxy request context: captured Flask request vars before generator to prevent `RuntimeError: Working outside of request context`
 
-## [v2.3] - 2026-02-21
+## [v0.3] - 2026-02-21
 
 ### Changed
 - **Metrics source: API-first instead of log parsing** — all model info (name, family, parameter size, quantization, VRAM) now comes from Ollama `/api/ps` and `/api/version` endpoints
@@ -60,7 +60,7 @@ All notable changes to ollama-dashboard will be documented in this file.
 - Log-based token parsing (`eval_count`, `prompt_eval_count`) — removed because Ollama 0.9.x no longer outputs these in logs
 - Per-request token tracking from request history (not available without log stats)
 
-## [v2.2] - 2026-02-21
+## [v0.2] - 2026-02-21
 
 ### Changed
 - Increased font sizes across the dashboard for better readability (labels, body text, stat values)
@@ -74,7 +74,7 @@ All notable changes to ollama-dashboard will be documented in this file.
 ### Fixed
 - Dashboard showing empty history when using host networking with Ollama on br0
 
-## [v2.1] - 2026-02-20
+## [v0.1] - 2026-02-20
 
 ### Initial public release
 - Real-time model status monitoring (loaded/unloaded detection)
