@@ -147,7 +147,7 @@ body::after {
 [data-mode="light"] .mode-toggle::after { transform:translateX(18px); }
 .mode-label { font-size:13px; color:var(--text-dim); letter-spacing:1px; }
 
-/* ── Connection + Clock + Uptime ─────────────────────────────── */
+/* ── Connection + Clock ──────────────────────────────────────── */
 .header-status-group { display:flex; align-items:center; gap:16px; }
 .conn-status { display:flex; align-items:center; gap:6px; font-size:13px; letter-spacing:1px; }
 .conn-dot {
@@ -156,6 +156,11 @@ body::after {
 }
 .conn-dot.offline { background:var(--accent-err); box-shadow:0 0 8px var(--accent-err); }
 @keyframes dotBlink { 0%,100%{opacity:1} 50%{opacity:0.4} }
+.proxy-dot {
+  display:inline-block; width:6px; height:6px; border-radius:50%; margin-right:4px;
+  background:var(--accent-1); box-shadow:0 0 6px var(--accent-1);
+}
+.proxy-dot.offline { background:var(--accent-err); box-shadow:0 0 6px var(--accent-err); }
 .header-time { font-size:13px; color:var(--text-dim); }
 .header-uptime {
   font-size:13px; color:var(--accent-1); letter-spacing:1px;
@@ -221,15 +226,59 @@ th {
   color:var(--text-muted); padding:7px 10px; border-bottom:1px solid var(--border);
   position:sticky; top:0; background:var(--bg-panel); z-index:1;
 }
+th.sortable { cursor:pointer; user-select:none; transition:color 0.2s; }
+th.sortable:hover { color:var(--accent-3); }
+th.sort-asc::after { content:' ▲'; font-size:10px; }
+th.sort-desc::after { content:' ▼'; font-size:10px; }
 td { padding:8px 10px; font-size:14px; border-bottom:1px solid rgba(0,0,0,0.04); color:var(--text-dim); }
+tr.clickable-row { cursor:pointer; }
+tr.clickable-row:hover td { background:var(--glow-1); }
 tr:hover td { background:var(--glow-1); }
 .td-name { color:var(--accent-3); font-weight:500; }
-.td-ok { color:var(--accent-1); font-weight:600; }
-.td-err { color:var(--accent-err); font-weight:600; }
 .td-dur { color:var(--accent-2); }
 .td-dim { color:var(--text-muted); font-size:13px; }
 .td-model { color:var(--accent-4); font-weight:500; font-size:12px; }
 .td-tok { color:var(--accent-1); font-weight:500; }
+.client-icon { margin-right:3px; }
+
+/* ── Load More ──────────────────────────────────────────────── */
+.load-more-row td { text-align:center; padding:12px; }
+.load-more-btn {
+  background:transparent; border:1px solid var(--border); color:var(--accent-3);
+  font-family:var(--font-body); font-size:13px; letter-spacing:1px;
+  padding:6px 20px; border-radius:var(--radius); cursor:pointer; transition:all 0.2s;
+}
+.load-more-btn:hover { border-color:var(--accent-3); background:rgba(0,200,224,0.08); }
+
+/* ── Popup Card ─────────────────────────────────────────────── */
+.popup-overlay {
+  display:none; position:fixed; inset:0; background:rgba(0,0,0,0.5);
+  z-index:5000; justify-content:center; align-items:center;
+}
+.popup-overlay.show { display:flex; }
+.popup-card {
+  background:var(--bg-panel); border:1px solid var(--border-glow);
+  border-radius:var(--radius); padding:20px 24px; min-width:340px; max-width:480px;
+  box-shadow:0 8px 32px rgba(0,0,0,0.4); position:relative;
+}
+.popup-close {
+  position:absolute; top:10px; right:14px; background:none; border:none;
+  color:var(--text-muted); font-size:18px; cursor:pointer; transition:color 0.2s;
+}
+.popup-close:hover { color:var(--accent-err); }
+.popup-title {
+  font-family:var(--font-display); font-size:14px; letter-spacing:2px;
+  color:var(--accent-3); text-transform:uppercase; margin-bottom:14px;
+  padding-bottom:10px; border-bottom:1px solid var(--border);
+}
+.popup-grid { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+.popup-item { }
+.popup-label { font-size:11px; letter-spacing:1.5px; text-transform:uppercase; color:var(--text-muted); margin-bottom:3px; }
+.popup-value { font-size:15px; font-weight:500; color:var(--text-primary); }
+.popup-value.accent1 { color:var(--accent-1); }
+.popup-value.accent2 { color:var(--accent-2); }
+.popup-value.accent3 { color:var(--accent-3); }
+.popup-value.accent4 { color:var(--accent-4); }
 
 /* ── Status pips ─────────────────────────────────────────────── */
 .pip { width:6px; height:6px; border-radius:50%; display:inline-block; margin-right:4px; }
@@ -311,12 +360,6 @@ tr:hover td { background:var(--glow-1); }
   padding:12px 14px; font-size:14px; color:var(--accent-3); line-height:1.8;
   margin-top:10px; white-space:pre-wrap; position:relative;
 }
-.cmd-copy {
-  position:absolute; top:8px; right:8px; background:var(--bg-panel);
-  border:1px solid var(--border); color:var(--text-dim); font-size:14px;
-  padding:3px 8px; border-radius:3px; cursor:pointer;
-}
-.cmd-copy:hover { color:var(--accent-1); border-color:var(--accent-1); }
 
 /* ── Toast ───────────────────────────────────────────────────── */
 .toast {
@@ -382,12 +425,13 @@ tr:hover td { background:var(--glow-1); }
       <div class="header-divider"></div>
       <div style="font-size:12px;color:var(--text-dim);">
         <span style="color:var(--text-muted);letter-spacing:1px;">PROXY</span>
-        <span id="proxyPort">—</span>
+        <span class="proxy-dot" id="proxyDot"></span>
+        <span id="proxyAddr">—</span>
       </div>
       <div class="header-divider"></div>
       <div class="header-uptime">
         <span class="header-uptime-label">UPTIME</span>
-        <span id="uptime">00:00:00</span>
+        <span id="ollamaUptime">—</span>
       </div>
       <div class="header-divider"></div>
       <div class="header-time" id="headerTime">--:--:--</div>
@@ -412,9 +456,9 @@ tr:hover td { background:var(--glow-1); }
       <div class="stat-sub" id="gpuMemSub">VRAM usage</div>
     </div>
     <div class="stat-card c3">
-      <div class="stat-label">Token Speed</div>
-      <div class="stat-value c3" id="tokenSpeed">—</div>
-      <div class="stat-sub">Last benchmark tok/s</div>
+      <div class="stat-label">Active Clients</div>
+      <div class="stat-value c3" id="activeClients">0</div>
+      <div class="stat-sub" id="activeClientsSub">No clients</div>
     </div>
     <div class="stat-card c4">
       <div class="stat-label">Total Requests</div>
@@ -422,14 +466,14 @@ tr:hover td { background:var(--glow-1); }
       <div class="stat-sub" id="totalReqsSub">Tracked</div>
     </div>
     <div class="stat-card c1">
-      <div class="stat-label">Models</div>
-      <div class="stat-value c1" id="modelsCount">0</div>
-      <div class="stat-sub" id="modelsSize">0 GB total</div>
+      <div class="stat-label">Total Tokens</div>
+      <div class="stat-value c1" id="totalTokens">0</div>
+      <div class="stat-sub" id="totalTokensSub">0 in + 0 out</div>
     </div>
     <div class="stat-card c2">
-      <div class="stat-label">Total Tokens</div>
-      <div class="stat-value c2" id="totalTokens">0</div>
-      <div class="stat-sub" id="totalTokensSub">0 in + 0 out</div>
+      <div class="stat-label">Avg tok/s</div>
+      <div class="stat-value c2" id="avgTokSec">—</div>
+      <div class="stat-sub" id="avgTokSecSub">No data</div>
     </div>
   </div>
 
@@ -485,9 +529,19 @@ tr:hover td { background:var(--glow-1); }
         <button class="filter-btn" data-filter="ty" onclick="setFilter('ty',this)">This Year</button>
       </div>
       <div class="panel-body" style="padding:0;">
-        <div class="scroll-box">
-          <table><thead><tr><th>Time</th><th>Endpoint</th><th>Duration</th><th>Model</th><th>In</th><th>Out</th><th>tok/s</th><th>Client</th></tr></thead>
-          <tbody id="histBody"><tr><td colspan="8" class="empty">No requests logged yet</td></tr></tbody></table>
+        <div class="scroll-box" id="histScroll">
+          <table id="histTable">
+            <thead><tr>
+              <th class="sortable" data-col="time" onclick="sortBy('time',this)">Time</th>
+              <th class="sortable" data-col="duration_ms" onclick="sortBy('duration_ms',this)">Duration</th>
+              <th class="sortable" data-col="model" onclick="sortBy('model',this)">Model</th>
+              <th class="sortable" data-col="prompt_tokens" onclick="sortBy('prompt_tokens',this)">In</th>
+              <th class="sortable" data-col="tokens" onclick="sortBy('tokens',this)">Out</th>
+              <th class="sortable" data-col="tokens_per_sec" onclick="sortBy('tokens_per_sec',this)">tok/s</th>
+              <th class="sortable" data-col="client_ip" onclick="sortBy('client_ip',this)">Client</th>
+            </tr></thead>
+            <tbody id="histBody"><tr><td colspan="7" class="empty">No requests logged yet</td></tr></tbody>
+          </table>
         </div>
       </div>
     </div>
@@ -576,15 +630,40 @@ docker build --no-cache -t ollama-intel .
   </div>
 </div>
 
+<!-- ════════ POPUP ════════ -->
+<div class="popup-overlay" id="popupOverlay" onclick="closePopup(event)">
+  <div class="popup-card" onclick="event.stopPropagation()">
+    <button class="popup-close" onclick="document.getElementById('popupOverlay').classList.remove('show')">✕</button>
+    <div class="popup-title" id="popupTitle">Request Details</div>
+    <div class="popup-grid" id="popupGrid"></div>
+  </div>
+</div>
+
 <div class="toast" id="toast"></div>
 
 <!-- ════════ JAVASCRIPT ════════ -->
 <script>
 const API = window.location.origin;
 let benchChart = null;
-const dashStart = Date.now();
 let allHistory = { requests:[], benchmarks:[], events:[] };
 let currentFilter = 'all';
+let sortState = { col: 'time', dir: 'desc' };
+const pageSize = 50;
+let currentPageCount = 50;
+let ollamaStartTime = null;
+
+// ── Client Name Mapping ─────────────────────────────────────
+const CLIENT_MAP = {
+  '10.0.1.211': { name:'Open WebUI', icon:'🌐' },
+  '10.0.1.210': { name:'Dashboard',  icon:'📊' },
+  '10.0.1.99':  { name:'Server',     icon:'🖥️' },
+};
+function getClient(ip) {
+  if (!ip) return { name:'Unknown', icon:'❓', ip:'' };
+  const mapped = CLIENT_MAP[ip];
+  if (mapped) return { ...mapped, ip };
+  return { name:ip, icon:'🤖', ip };
+}
 
 // ── Theme System ─────────────────────────────────────────────
 function setTheme(theme) {
@@ -627,7 +706,8 @@ function fmtBytes(b) {
 }
 function fmtDur(ms) {
   if(ms<1000) return ms.toFixed(0)+'ms';
-  if(ms<60000) return (ms/1000).toFixed(1)+'s';
+  const s = ms/1000;
+  if(s<60) return s>=1 ? Math.round(s)+'s' : s.toFixed(1)+'s';
   return (ms/60000).toFixed(1)+'m';
 }
 function fmtTime(iso) {
@@ -644,14 +724,18 @@ function showToast(msg, err) {
   t.textContent=msg; t.className=err?'toast error show':'toast show';
   setTimeout(()=>t.className='toast', 3000);
 }
+function fmtUptime(ms) {
+  const s=Math.floor(ms/1000), m=Math.floor(s/60), h=Math.floor(m/60);
+  return `${String(h).padStart(2,'0')}:${String(m%60).padStart(2,'0')}:${String(s%60).padStart(2,'0')}`;
+}
 
-// ── Clock + Uptime ───────────────────────────────────────────
+// ── Clock + Ollama Uptime ───────────────────────────────────
 function tick() {
   const now=new Date();
   document.getElementById('headerTime').textContent=now.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
-  const e=Date.now()-dashStart;
-  const h=Math.floor(e/3600000), m=Math.floor((e%3600000)/60000), s=Math.floor((e%60000)/1000);
-  document.getElementById('uptime').textContent=`${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+  if(ollamaStartTime) {
+    document.getElementById('ollamaUptime').textContent = fmtUptime(Date.now() - ollamaStartTime);
+  }
 }
 setInterval(tick,1000); tick();
 
@@ -675,10 +759,80 @@ function filterEntries(entries, filter) {
 }
 function setFilter(f, el) {
   currentFilter = f;
+  currentPageCount = pageSize;
   document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
   el.classList.add('active');
   renderHistory();
 }
+
+// ── Sorting ─────────────────────────────────────────────────
+function sortBy(col, thEl) {
+  if (sortState.col === col) {
+    sortState.dir = sortState.dir === 'asc' ? 'desc' : 'asc';
+  } else {
+    sortState.col = col;
+    sortState.dir = 'desc';
+  }
+  document.querySelectorAll('#histTable th').forEach(th => {
+    th.classList.remove('sort-asc','sort-desc');
+  });
+  thEl.classList.add(sortState.dir === 'asc' ? 'sort-asc' : 'sort-desc');
+  renderHistory();
+}
+
+function sortEntries(entries) {
+  const col = sortState.col;
+  const dir = sortState.dir === 'asc' ? 1 : -1;
+  return entries.slice().sort((a,b) => {
+    let va = a[col], vb = b[col];
+    if (col === 'time') {
+      va = va || ''; vb = vb || '';
+      return va < vb ? -dir : va > vb ? dir : 0;
+    }
+    if (typeof va === 'number' && typeof vb === 'number') return (va - vb) * dir;
+    va = String(va||'').toLowerCase(); vb = String(vb||'').toLowerCase();
+    return va < vb ? -dir : va > vb ? dir : 0;
+  });
+}
+
+// ── Popup ───────────────────────────────────────────────────
+function showPopup(idx) {
+  const filtered = filterEntries(allHistory.requests||[], currentFilter);
+  const sorted = sortEntries(filtered);
+  const r = sorted[idx];
+  if (!r) return;
+  const client = getClient(r.client_ip);
+  const items = [
+    { label:'Time', value:fmtTime(r.time), cls:'' },
+    { label:'Client', value:`${client.icon} ${client.name} (${r.client_ip||'?'})`, cls:'accent3' },
+    { label:'Endpoint', value:r.path||'—', cls:'accent3' },
+    { label:'Method', value:r.method||'—', cls:'' },
+    { label:'Model', value:r.model||'—', cls:'accent4' },
+    { label:'Duration', value:r.duration||'—', cls:'accent2' },
+    { label:'In Tokens', value:r.prompt_tokens||0, cls:'accent1' },
+    { label:'Out Tokens', value:r.tokens||0, cls:'accent1' },
+    { label:'Total Tokens', value:r.total_tokens||0, cls:'accent1' },
+    { label:'Gen Speed', value:(r.tokens_per_sec ? r.tokens_per_sec.toFixed(1)+' tok/s' : '—'), cls:'accent2' },
+    { label:'Prompt Speed', value:(r.prompt_tok_per_sec ? r.prompt_tok_per_sec.toFixed(1)+' tok/s' : '—'), cls:'accent2' },
+    { label:'Source', value:r.source==='proxy' ? '⬡ Proxy' : 'Direct', cls:'' },
+  ];
+  if (r.done_reason) items.push({ label:'Done Reason', value:r.done_reason, cls:'' });
+
+  document.getElementById('popupTitle').textContent = `${client.icon} ${r.model || 'Request'} — ${fmtTime(r.time)}`;
+  document.getElementById('popupGrid').innerHTML = items.map(i =>
+    `<div class="popup-item"><div class="popup-label">${i.label}</div><div class="popup-value ${i.cls}">${i.value}</div></div>`
+  ).join('');
+  document.getElementById('popupOverlay').classList.add('show');
+}
+function closePopup(e) {
+  if (e.target.id === 'popupOverlay') {
+    document.getElementById('popupOverlay').classList.remove('show');
+  }
+}
+// Close popup on Escape
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') document.getElementById('popupOverlay').classList.remove('show');
+});
 
 // ── Fetch Status ─────────────────────────────────────────────
 async function fetchStatus() {
@@ -689,9 +843,24 @@ async function fetchStatus() {
     if(d.status==='online'){ dot.className='conn-dot'; lbl.textContent='ONLINE'; }
     else { dot.className='conn-dot offline'; lbl.textContent='OFFLINE'; }
 
-    // Ollama version from API
+    // Ollama version
     document.getElementById('ollamaVer').textContent=d.ollama_version||'—';
-    document.getElementById('proxyPort').textContent=d.proxy_port ? ':'+d.proxy_port : '—';
+
+    // Proxy IP:port with status dot
+    const proxyDot = document.getElementById('proxyDot');
+    const proxyAddr = document.getElementById('proxyAddr');
+    if(d.proxy_ip && d.proxy_port) {
+      proxyAddr.textContent = d.proxy_ip + ':' + d.proxy_port;
+      proxyDot.className = 'proxy-dot';
+    } else {
+      proxyAddr.textContent = '—';
+      proxyDot.className = 'proxy-dot offline';
+    }
+
+    // Ollama uptime — use dashboard_start as proxy for container start
+    if(d.dashboard_start && !ollamaStartTime) {
+      ollamaStartTime = new Date(d.dashboard_start).getTime();
+    }
 
     const running = d.running?.models||[];
     const details = d.model_details||[];
@@ -703,8 +872,8 @@ async function fetchStatus() {
       if(det.parameter_size) parts.push(det.parameter_size);
       if(det.quantization) parts.push(det.quantization);
       if(det.family) parts.push(det.family);
-      const vram=m.size_vram||m.size||0;
       sub.textContent=parts.length>0 ? parts.join(' · ') : 'Loaded';
+      const vram=m.size_vram||m.size||0;
       document.getElementById('gpuMem').textContent=fmtBytes(vram);
       document.getElementById('gpuMemSub').textContent=running.length+' model(s) loaded';
     } else {
@@ -715,10 +884,7 @@ async function fetchStatus() {
 
     const models=d.models?.models||[];
     const runNames=new Set(running.map(m=>m.name));
-    document.getElementById('modelsCount').textContent=models.length;
     document.getElementById('modelsBadge').textContent=models.length;
-    const totalSz=models.reduce((s,m)=>s+(m.size||0),0);
-    document.getElementById('modelsSize').textContent=fmtBytes(totalSz)+' total';
 
     const tb=document.getElementById('modelsBody');
     if(!models.length){ tb.innerHTML='<tr><td colspan="4" class="empty">No models installed</td></tr>'; }
@@ -759,7 +925,6 @@ function renderTokChart(reqs) {
   const badge = document.getElementById('chartAvgTps');
   const ctx = canvas.getContext('2d');
 
-  // Filter to only proxied requests with tok/s data
   const points = reqs.filter(r => r.source==='proxy' && r.tokens_per_sec > 0).reverse();
 
   if (points.length < 2) {
@@ -769,7 +934,6 @@ function renderTokChart(reqs) {
   }
   canvas.style.display='block'; emptyMsg.style.display='none';
 
-  // Resize canvas for sharp rendering
   const rect = canvas.parentElement.getBoundingClientRect();
   const dpr = window.devicePixelRatio || 1;
   canvas.width = rect.width * dpr;
@@ -778,7 +942,6 @@ function renderTokChart(reqs) {
   ctx.scale(dpr, dpr);
   const W = rect.width, H = 180;
 
-  // Data
   const values = points.map(p => p.tokens_per_sec);
   const avg = values.reduce((a,b)=>a+b,0) / values.length;
   badge.textContent = avg.toFixed(1) + ' avg tok/s';
@@ -796,7 +959,6 @@ function renderTokChart(reqs) {
   const dimColor = style.getPropertyValue('--text-dim').trim() || '#666';
   const lineColor = style.getPropertyValue('--border').trim() || '#333';
 
-  // Grid lines
   ctx.strokeStyle = lineColor; ctx.lineWidth = 0.5;
   const gridLines = 4;
   ctx.font = '11px monospace'; ctx.fillStyle = dimColor; ctx.textAlign = 'right';
@@ -807,7 +969,6 @@ function renderTokChart(reqs) {
     ctx.fillText(val.toFixed(1), pad.left - 6, y + 4);
   }
 
-  // Plot line
   ctx.strokeStyle = accent; ctx.lineWidth = 2; ctx.lineJoin = 'round';
   ctx.beginPath();
   for (let i = 0; i < values.length; i++) {
@@ -817,9 +978,7 @@ function renderTokChart(reqs) {
   }
   ctx.stroke();
 
-  // Fill under line
   const lastX = pad.left + cW;
-  const lastY = pad.top + cH - ((values[values.length-1] - minV) / (maxV - minV)) * cH;
   ctx.lineTo(lastX, pad.top + cH);
   ctx.lineTo(pad.left, pad.top + cH);
   ctx.closePath();
@@ -829,7 +988,6 @@ function renderTokChart(reqs) {
   ctx.fillStyle = grad;
   ctx.fill();
 
-  // Average line
   const avgY = pad.top + cH - ((avg - minV) / (maxV - minV)) * cH;
   ctx.strokeStyle = accent2; ctx.lineWidth = 1; ctx.setLineDash([4,4]);
   ctx.beginPath(); ctx.moveTo(pad.left, avgY); ctx.lineTo(W - pad.right, avgY); ctx.stroke();
@@ -837,7 +995,6 @@ function renderTokChart(reqs) {
   ctx.fillStyle = accent2; ctx.textAlign = 'left'; ctx.font = '10px monospace';
   ctx.fillText('avg ' + avg.toFixed(1), W - pad.right - 50, avgY - 5);
 
-  // X-axis labels (first, middle, last timestamps)
   ctx.fillStyle = dimColor; ctx.font = '10px monospace'; ctx.textAlign = 'center';
   const labelIdxs = [0, Math.floor(points.length/2), points.length-1];
   for (const idx of labelIdxs) {
@@ -850,42 +1007,72 @@ function renderTokChart(reqs) {
 }
 
 function renderHistory() {
-  const reqs=filterEntries(allHistory.requests||[], currentFilter).slice().reverse();
-  document.getElementById('totalReqs').textContent=reqs.length;
-  document.getElementById('totalReqsSub').textContent=reqs.length+' tracked';
-  document.getElementById('histBadge').textContent=reqs.length;
+  const filtered = filterEntries(allHistory.requests||[], currentFilter);
+  const sorted = sortEntries(filtered);
+
+  document.getElementById('totalReqs').textContent=sorted.length;
+  document.getElementById('totalReqsSub').textContent=sorted.length+' tracked';
+  document.getElementById('histBadge').textContent=sorted.length;
 
   // Filtered token totals
-  const filteredIn = reqs.reduce((s,r)=>s+(r.prompt_tokens||0),0);
-  const filteredOut = reqs.reduce((s,r)=>s+(r.tokens||0),0);
+  const filteredIn = sorted.reduce((s,r)=>s+(r.prompt_tokens||0),0);
+  const filteredOut = sorted.reduce((s,r)=>s+(r.tokens||0),0);
   document.getElementById('totalTokens').textContent=fmtNum(filteredIn+filteredOut);
   document.getElementById('totalTokensSub').textContent=
     `${fmtNum(filteredIn)} in + ${fmtNum(filteredOut)} out`;
 
+  // Active clients
+  const uniqueIPs = new Set(sorted.map(r=>r.client_ip).filter(Boolean));
+  document.getElementById('activeClients').textContent = uniqueIPs.size;
+  const clientNames = [...uniqueIPs].map(ip => { const c=getClient(ip); return c.icon+' '+c.name; });
+  document.getElementById('activeClientsSub').textContent = clientNames.length > 0 ? clientNames.slice(0,3).join(', ') : 'No clients';
+
+  // Avg tok/s
+  const proxiedWithSpeed = sorted.filter(r => r.source==='proxy' && r.tokens_per_sec > 0);
+  if (proxiedWithSpeed.length > 0) {
+    const avgTps = proxiedWithSpeed.reduce((s,r) => s+r.tokens_per_sec, 0) / proxiedWithSpeed.length;
+    const peakTps = Math.max(...proxiedWithSpeed.map(r => r.tokens_per_sec));
+    document.getElementById('avgTokSec').textContent = avgTps.toFixed(1);
+    document.getElementById('avgTokSecSub').textContent = `Peak: ${peakTps.toFixed(1)} tok/s`;
+  } else {
+    document.getElementById('avgTokSec').textContent = '—';
+    document.getElementById('avgTokSecSub').textContent = 'No proxy data';
+  }
+
+  // Render table with pagination
   const hb=document.getElementById('histBody');
-  if(!reqs.length){ hb.innerHTML='<tr><td colspan="8" class="empty">No requests in this period</td></tr>'; }
-  else {
-    hb.innerHTML=reqs.slice(0,300).map(r=>{
-      const modelDisplay = r.model || '—';
+  const visible = sorted.slice(0, currentPageCount);
+  const hasMore = sorted.length > currentPageCount;
+
+  if(!sorted.length) {
+    hb.innerHTML='<tr><td colspan="7" class="empty">No requests in this period</td></tr>';
+  } else {
+    let rows = visible.map((r,i) => {
+      const client = getClient(r.client_ip);
       const inTok = (r.prompt_tokens && r.prompt_tokens > 0) ? r.prompt_tokens : '—';
       const outTok = (r.tokens && r.tokens > 0) ? r.tokens : '—';
       const tps = (r.tokens_per_sec && r.tokens_per_sec > 0) ? r.tokens_per_sec.toFixed(1) : '—';
-      const srcTag = r.source==='proxy' ? '⬡' : '';
-      return `<tr>
+      return `<tr class="clickable-row" onclick="showPopup(${i})">
         <td class="td-dim">${fmtTime(r.time)}</td>
-        <td class="td-name">${r.path||'—'}</td>
         <td class="td-dur">${r.duration||'—'}</td>
-        <td class="td-model">${modelDisplay}</td>
+        <td class="td-model">${r.model||'—'}</td>
         <td class="td-tok">${inTok}</td>
         <td class="td-tok">${outTok}</td>
         <td class="td-dur">${tps}</td>
-        <td class="td-dim">${r.client_ip||'—'} ${srcTag}</td>
+        <td class="td-dim"><span class="client-icon">${client.icon}</span>${client.name}</td>
       </tr>`;
     }).join('');
+
+    if (hasMore) {
+      rows += `<tr class="load-more-row"><td colspan="7">
+        <button class="load-more-btn" onclick="loadMore()">Load more (${sorted.length - currentPageCount} remaining)</button>
+      </td></tr>`;
+    }
+    hb.innerHTML = rows;
   }
 
-  // Render tok/s over time chart
-  renderTokChart(reqs);
+  // Chart uses all filtered data (not paginated)
+  renderTokChart(sorted);
 
   // Events
   const events=(allHistory.events||[]).slice().reverse();
@@ -905,13 +1092,17 @@ function renderHistory() {
   document.getElementById('benchBadge').textContent=benches.length+' runs';
   if(benches.length>0){
     const last=benches[benches.length-1];
-    document.getElementById('tokenSpeed').textContent=last.tokens_per_sec?.toFixed(1)||'—';
     document.getElementById('brTokSec').textContent=(last.tokens_per_sec?.toFixed(1)||'—')+' t/s';
     document.getElementById('brTokens').textContent=last.eval_count||'—';
     document.getElementById('brPromptRate').textContent=(last.prompt_eval_rate?.toFixed(1)||'—')+' t/s';
     document.getElementById('brTotal').textContent=fmtDur(last.total_duration_ms||0);
   }
   updateChart(benches);
+}
+
+function loadMore() {
+  currentPageCount += pageSize;
+  renderHistory();
 }
 
 // ── Chart ────────────────────────────────────────────────────
@@ -968,7 +1159,6 @@ async function runBenchmark() {
       document.getElementById('brTokens').textContent=d.eval_count||'—';
       document.getElementById('brPromptRate').textContent=(d.prompt_eval_rate?.toFixed(1)||'—')+' t/s';
       document.getElementById('brTotal').textContent=fmtDur(d.total_duration_ms||0);
-      document.getElementById('tokenSpeed').textContent=d.tokens_per_sec?.toFixed(1)||'—';
       showToast(`Benchmark: ${d.tokens_per_sec?.toFixed(1)} tok/s`);
       await fetchHistory();
     }
