@@ -250,31 +250,38 @@ def proxy_handler(path):
         )
 
         if is_trackable and is_streaming:
-            # ── Streaming: pass through chunks, capture final stats ──
-            # Strip content-length — Flask will use chunked encoding for generators
-            stream_headers = {k: v for k, v in ollama_resp.headers.items()
-                             if k.lower() not in ('connection', 'content-encoding', 'content-length', 'transfer-encoding')}
-
+            # ── Streaming: raw byte passthrough, parse stats after ──
             def stream_and_capture():
-                model_name = body_json.get('model', '—') if body_json else '—'
-                final_stats = {}
-
-                for chunk in ollama_resp.iter_lines():
+                accumulated = b''
+                for chunk in ollama_resp.iter_content(chunk_size=None):
                     if chunk:
-                        yield chunk + b'\n'
-                        try:
-                            data = json.loads(chunk)
-                            if data.get('done'):
-                                final_stats = data
-                        except:
-                            pass
+                        yield chunk
+                        accumulated += chunk
 
-                # Log after stream completes
+                # Parse accumulated NDJSON for final stats
+                model_name = body_json.get('model', '—') if body_json else '—'
                 elapsed_ms = (time.time() - start_ts) * 1000
-                eval_tokens = final_stats.get('eval_count', 0)
-                prompt_tokens = final_stats.get('prompt_eval_count', 0)
-                eval_dur = final_stats.get('eval_duration', 0)
-                tok_per_sec = round(eval_tokens / max(eval_dur / 1e9, 0.001), 2) if eval_dur > 0 else 0
+                eval_tokens = 0
+                prompt_tokens = 0
+                tok_per_sec = 0
+
+                try:
+                    lines = accumulated.decode('utf-8', errors='replace').strip().split('\n')
+                    for line in reversed(lines):
+                        try:
+                            data = json.loads(line)
+                            if data.get('done'):
+                                eval_tokens = data.get('eval_count', 0)
+                                prompt_tokens = data.get('prompt_eval_count', 0)
+                                eval_dur = data.get('eval_duration', 0)
+                                if eval_dur > 0:
+                                    tok_per_sec = round(eval_tokens / max(eval_dur / 1e9, 0.001), 2)
+                                model_name = data.get('model', model_name)
+                                break
+                        except:
+                            continue
+                except:
+                    pass
 
                 entry = {
                     "time": datetime.now().isoformat(),
@@ -294,28 +301,31 @@ def proxy_handler(path):
                 }
                 log_request(entry)
 
-            return Response(stream_and_capture(), status=ollama_resp.status_code, headers=stream_headers,
-                           content_type='application/x-ndjson')
+            # Mirror Ollama's content type exactly
+            ct = ollama_resp.headers.get('Content-Type', 'application/x-ndjson')
+            return Response(stream_and_capture(), status=ollama_resp.status_code,
+                           content_type=ct, direct_passthrough=True)
 
         elif is_trackable and not is_streaming:
             # ── Non-streaming: read full response, capture stats ──
             resp_data = ollama_resp.content
-            nonstream_headers = {k: v for k, v in ollama_resp.headers.items()
-                                if k.lower() not in ('connection', 'content-encoding', 'transfer-encoding')}
             elapsed_ms = (time.time() - start_ts) * 1000
+
+            model_name = body_json.get('model', '—') if body_json else '—'
+            eval_tokens = 0
+            prompt_tokens = 0
+            tok_per_sec = 0
 
             try:
                 data = json.loads(resp_data)
-                model_name = data.get('model', body_json.get('model', '—') if body_json else '—')
+                model_name = data.get('model', model_name)
                 eval_tokens = data.get('eval_count', 0)
                 prompt_tokens = data.get('prompt_eval_count', 0)
                 eval_dur = data.get('eval_duration', 0)
-                tok_per_sec = round(eval_tokens / max(eval_dur / 1e9, 0.001), 2) if eval_dur > 0 else 0
+                if eval_dur > 0:
+                    tok_per_sec = round(eval_tokens / max(eval_dur / 1e9, 0.001), 2)
             except:
-                model_name = body_json.get('model', '—') if body_json else '—'
-                eval_tokens = 0
-                prompt_tokens = 0
-                tok_per_sec = 0
+                pass
 
             entry = {
                 "time": datetime.now().isoformat(),
@@ -335,19 +345,20 @@ def proxy_handler(path):
             }
             log_request(entry)
 
-            return Response(resp_data, status=ollama_resp.status_code, headers=nonstream_headers)
+            # Return exact response from Ollama
+            ct = ollama_resp.headers.get('Content-Type', 'application/json')
+            return Response(resp_data, status=ollama_resp.status_code, content_type=ct)
 
         else:
             # ── Non-trackable: pure passthrough ──
-            pass_headers = {k: v for k, v in ollama_resp.headers.items()
-                           if k.lower() not in ('connection', 'content-encoding', 'transfer-encoding', 'content-length')}
-
             def passthrough():
-                for chunk in ollama_resp.iter_content(chunk_size=8192):
+                for chunk in ollama_resp.iter_content(chunk_size=None):
                     if chunk:
                         yield chunk
 
-            return Response(passthrough(), status=ollama_resp.status_code, headers=pass_headers)
+            ct = ollama_resp.headers.get('Content-Type', 'application/json')
+            return Response(passthrough(), status=ollama_resp.status_code,
+                           content_type=ct, direct_passthrough=True)
 
     except requests.exceptions.ConnectionError:
         return jsonify({"error": "Cannot connect to Ollama"}), 502

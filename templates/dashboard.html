@@ -486,8 +486,8 @@ tr:hover td { background:var(--glow-1); }
       </div>
       <div class="panel-body" style="padding:0;">
         <div class="scroll-box">
-          <table><thead><tr><th>Time</th><th>Endpoint</th><th>Status</th><th>Duration</th><th>Model</th><th>Tokens</th><th>Client</th></tr></thead>
-          <tbody id="histBody"><tr><td colspan="7" class="empty">No requests logged yet</td></tr></tbody></table>
+          <table><thead><tr><th>Time</th><th>Endpoint</th><th>Duration</th><th>Model</th><th>Tokens</th><th>Client</th></tr></thead>
+          <tbody id="histBody"><tr><td colspan="6" class="empty">No requests logged yet</td></tr></tbody></table>
         </div>
       </div>
     </div>
@@ -751,7 +751,7 @@ function renderHistory() {
   document.getElementById('histBadge').textContent=reqs.length;
 
   const hb=document.getElementById('histBody');
-  if(!reqs.length){ hb.innerHTML='<tr><td colspan="7" class="empty">No requests in this period</td></tr>'; }
+  if(!reqs.length){ hb.innerHTML='<tr><td colspan="6" class="empty">No requests in this period</td></tr>'; }
   else {
     hb.innerHTML=reqs.slice(0,300).map(r=>{
       const modelDisplay = r.model || '—';
@@ -760,7 +760,6 @@ function renderHistory() {
       return `<tr>
         <td class="td-dim">${fmtTime(r.time)}</td>
         <td class="td-name">${r.path||'—'}</td>
-        <td class="${r.status===200?'td-ok':'td-err'}">${r.status||'—'}</td>
         <td class="td-dur">${r.duration||'—'}</td>
         <td class="td-model">${modelDisplay}</td>
         <td class="td-tok">${tokDisplay}</td>
