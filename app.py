@@ -23,6 +23,13 @@ HISTORY_FILE = os.path.join(DATA_DIR, 'history.json')
 POLL_INTERVAL = int(os.environ.get('POLL_INTERVAL', 5))
 PROXY_PORT = int(os.environ.get('PROXY_PORT', 11434))
 
+# Client name mapping (JSON string from env, or empty)
+_cm = os.environ.get('CLIENT_MAP', '{}')
+try:
+    CLIENT_MAP = json.loads(_cm)
+except:
+    CLIENT_MAP = {}
+
 history_lock = threading.Lock()
 current_status = {"status": "starting", "running": {"models": []}, "models": {"models": []}}
 start_time = datetime.now().isoformat()
@@ -463,6 +470,10 @@ def poll_loop():
 @app.route('/')
 def dashboard():
     return render_template('dashboard.html')
+
+@app.route('/api/client-map')
+def api_client_map():
+    return jsonify(CLIENT_MAP)
 
 @app.route('/api/status')
 def api_status():
