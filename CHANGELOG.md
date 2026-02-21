@@ -2,6 +2,24 @@
 
 All notable changes to ollama-dashboard will be documented in this file.
 
+## [v2.4] - 2026-02-21
+
+### Added
+- **Ollama API Proxy** on port 11434 — transparent proxy that captures token stats from every request
+  - Clients (Open WebUI, agents, etc.) point to dashboard IP:11434 instead of Ollama directly
+  - Full token tracking: eval_count, prompt_eval_count, tokens/sec for all proxied requests
+  - Supports both streaming and non-streaming responses
+  - Auto-detects own IP to avoid duplicate entries with GIN log parsing
+- Request history now shows both **Model** and **Tokens** columns
+- ⬡ indicator in Client column for proxied requests
+- Proxy port displayed in dashboard header
+- Total Tokens stat card now includes tokens from proxied requests + benchmarks
+- Proxy/direct request count breakdown in history stats
+
+### Changed
+- "Bench Tokens" card renamed back to "Total Tokens" (proxy enables full token tracking again)
+- GIN log parser filters out proxy-originated requests to avoid duplicates
+
 ## [v2.3] - 2026-02-21
 
 ### Changed

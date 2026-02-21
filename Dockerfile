@@ -7,5 +7,5 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY app.py .
 COPY templates/ templates/
 
-EXPOSE 8088
+EXPOSE 8088 11434
 CMD ["python", "app.py"]

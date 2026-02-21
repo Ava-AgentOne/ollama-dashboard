@@ -34,13 +34,14 @@ Designed as a companion to [ollama-intel](https://github.com/Ava-AgentOne/ollama
 | Feature | Description |
 |---------|-------------|
 | 📡 **Live Status** | Real-time model loading/unloading detection |
-| 📜 **Request History** | Tracks all API requests with token counts, parsed from Docker logs |
+| 📜 **Request History** | Tracks all API requests with model name, tokens, and duration |
+| 🔀 **API Proxy** | Transparent Ollama proxy (port 11434) — captures token stats from every request |
 | ⚡ **Benchmarking** | Run speed tests against any loaded model with detailed metrics |
 | 🎨 **6 Visual Themes** | 3 themes (Terminal, Cyberpunk, Ocean) × 2 modes (Dark/Light) |
 | 🔄 **Update Checker** | Monitors Python package versions and base image status |
 | 📦 **History Export** | Export, trim, and clear request history as JSON |
 | 🔒 **Deduplication** | Hash-based log entry deduplication prevents duplicates |
-| 📈 **Token Tracking** | Tracks prompt tokens, generation tokens, and totals |
+| 📈 **Token Tracking** | Full token tracking via proxy — prompt tokens, generation tokens, tok/s |
 
 ## 🎨 Themes
 
@@ -92,6 +93,41 @@ docker run -d \
 > Replace `<YOUR_IP>` with a free static IP on your LAN, and `<OLLAMA_IP>` with the IP of your Ollama container.
 
 > ⚠️ **Networking Note**: If your Ollama container runs on br0 (macvlan), the dashboard must also be on br0. Linux hosts cannot reach their own macvlan containers — so using `host` networking for the dashboard while Ollama is on br0 will result in "No route to host" errors.
+
+## 🔀 API Proxy (Token Tracking)
+
+The dashboard includes a built-in **Ollama API proxy** on port **11434**. Point your clients to the dashboard instead of Ollama directly, and every request gets full token tracking.
+
+### How It Works
+
+```
+Client (Open WebUI, agent, etc.)
+    ↓ sends request to
+Dashboard Proxy (dashboard-ip:11434)
+    ↓ forwards to
+Ollama (ollama-ip:11434)
+    ↓ response passes back through proxy
+Dashboard captures: model, tokens, duration, tok/s
+```
+
+### Setup
+
+In your client (Open WebUI, agent, etc.), change the Ollama URL:
+
+| Setting | Before | After |
+|---------|--------|-------|
+| Ollama URL | `http://<OLLAMA_IP>:11434` | `http://<DASHBOARD_IP>:11434` |
+
+The proxy is 100% transparent — same API, same responses. Clients won't notice any difference.
+
+### What Gets Tracked
+
+| Source | Model | Tokens | Duration | Client IP |
+|--------|-------|--------|----------|-----------|
+| **Via proxy** | ✅ | ✅ | ✅ | ✅ |
+| **Direct to Ollama** | ✅ | ❌ | ✅ | ✅ |
+
+Requests that bypass the proxy still appear in history (from Docker log parsing) but without token counts.
 
 ### Unraid Private Apps (Recommended)
 

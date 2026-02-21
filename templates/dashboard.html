@@ -229,6 +229,7 @@ tr:hover td { background:var(--glow-1); }
 .td-dur { color:var(--accent-2); }
 .td-dim { color:var(--text-muted); font-size:13px; }
 .td-model { color:var(--accent-4); font-weight:500; font-size:12px; }
+.td-tok { color:var(--accent-1); font-weight:500; }
 
 /* ── Status pips ─────────────────────────────────────────────── */
 .pip { width:6px; height:6px; border-radius:50%; display:inline-block; margin-right:4px; }
@@ -379,6 +380,11 @@ tr:hover td { background:var(--glow-1); }
         <span id="ollamaVer">—</span>
       </div>
       <div class="header-divider"></div>
+      <div style="font-size:12px;color:var(--text-dim);">
+        <span style="color:var(--text-muted);letter-spacing:1px;">PROXY</span>
+        <span id="proxyPort">—</span>
+      </div>
+      <div class="header-divider"></div>
       <div class="header-uptime">
         <span class="header-uptime-label">UPTIME</span>
         <span id="uptime">00:00:00</span>
@@ -421,9 +427,9 @@ tr:hover td { background:var(--glow-1); }
       <div class="stat-sub" id="modelsSize">0 GB total</div>
     </div>
     <div class="stat-card c2">
-      <div class="stat-label">Bench Tokens</div>
+      <div class="stat-label">Total Tokens</div>
       <div class="stat-value c2" id="totalTokens">0</div>
-      <div class="stat-sub" id="totalTokensSub">From benchmarks</div>
+      <div class="stat-sub" id="totalTokensSub">All sources</div>
     </div>
   </div>
 
@@ -480,8 +486,8 @@ tr:hover td { background:var(--glow-1); }
       </div>
       <div class="panel-body" style="padding:0;">
         <div class="scroll-box">
-          <table><thead><tr><th>Time</th><th>Endpoint</th><th>Status</th><th>Duration</th><th>Model</th><th>Client</th></tr></thead>
-          <tbody id="histBody"><tr><td colspan="6" class="empty">No requests logged yet</td></tr></tbody></table>
+          <table><thead><tr><th>Time</th><th>Endpoint</th><th>Status</th><th>Duration</th><th>Model</th><th>Tokens</th><th>Client</th></tr></thead>
+          <tbody id="histBody"><tr><td colspan="7" class="empty">No requests logged yet</td></tr></tbody></table>
         </div>
       </div>
     </div>
@@ -671,6 +677,7 @@ async function fetchStatus() {
 
     // Ollama version from API
     document.getElementById('ollamaVer').textContent=d.ollama_version||'—';
+    document.getElementById('proxyPort').textContent=d.proxy_port ? ':'+d.proxy_port : '—';
 
     const running = d.running?.models||[];
     const details = d.model_details||[];
@@ -729,8 +736,9 @@ async function fetchHistory() {
     const sd=await sr.json();
     document.getElementById('histFileInfo').textContent=
       `Reqs: ${sd.requests} | Bench: ${sd.benchmarks} | Events: ${sd.events} | File: ${sd.file_size}`;
-    // Update bench tokens stat card
+    // Update total tokens stat card
     document.getElementById('totalTokens').textContent=fmtNum(sd.total_tokens||0);
+    const proxied=sd.proxied_requests||0, direct=sd.direct_requests||0;
     document.getElementById('totalTokensSub').textContent=
       `${fmtNum(sd.total_gen_tokens||0)} gen + ${fmtNum(sd.total_prompt_tokens||0)} prompt`;
   } catch(e){}
@@ -743,17 +751,20 @@ function renderHistory() {
   document.getElementById('histBadge').textContent=reqs.length;
 
   const hb=document.getElementById('histBody');
-  if(!reqs.length){ hb.innerHTML='<tr><td colspan="6" class="empty">No requests in this period</td></tr>'; }
+  if(!reqs.length){ hb.innerHTML='<tr><td colspan="7" class="empty">No requests in this period</td></tr>'; }
   else {
     hb.innerHTML=reqs.slice(0,300).map(r=>{
       const modelDisplay = r.model || '—';
+      const tokDisplay = (r.total_tokens && r.total_tokens > 0) ? r.total_tokens : '—';
+      const srcTag = r.source==='proxy' ? '⬡' : '';
       return `<tr>
         <td class="td-dim">${fmtTime(r.time)}</td>
         <td class="td-name">${r.path||'—'}</td>
         <td class="${r.status===200?'td-ok':'td-err'}">${r.status||'—'}</td>
         <td class="td-dur">${r.duration||'—'}</td>
         <td class="td-model">${modelDisplay}</td>
-        <td class="td-dim">${r.client_ip||'—'}</td>
+        <td class="td-tok">${tokDisplay}</td>
+        <td class="td-dim">${r.client_ip||'—'} ${srcTag}</td>
       </tr>`;
     }).join('');
   }

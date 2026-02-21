@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Ollama Intel iGPU Monitoring Dashboard v2.3 — Backend"""
+"""Ollama Intel iGPU Monitoring Dashboard v2.4 — Backend + API Proxy"""
 
-from flask import Flask, jsonify, render_template, request as flask_request
+from flask import Flask, jsonify, render_template, request as flask_request, Response
 import requests
 import json
 import os
@@ -11,7 +11,9 @@ import re
 import hashlib
 from datetime import datetime, timedelta
 
+# ── Two Flask apps: Dashboard (8088) + Proxy (11434) ────────────
 app = Flask(__name__)
+proxy_app = Flask(__name__ + '_proxy')
 
 # ── Configuration ────────────────────────────────────────────────
 OLLAMA_URL = os.environ.get('OLLAMA_URL', 'http://localhost:11434')
@@ -19,6 +21,7 @@ OLLAMA_CONTAINER = os.environ.get('OLLAMA_CONTAINER', 'ollama-intel')
 DATA_DIR = os.environ.get('DATA_DIR', '/data')
 HISTORY_FILE = os.path.join(DATA_DIR, 'history.json')
 POLL_INTERVAL = int(os.environ.get('POLL_INTERVAL', 5))
+PROXY_PORT = int(os.environ.get('PROXY_PORT', 11434))
 
 history_lock = threading.Lock()
 current_status = {"status": "starting", "running": {"models": []}, "models": {"models": []}}
@@ -30,6 +33,9 @@ MAX_SEEN = 5000
 
 # Track currently active model (from API, not logs)
 active_model = "—"
+
+# Track proxy's own IP to filter from GIN logs
+proxy_self_ip = None
 
 # ── History persistence ──────────────────────────────────────────
 def load_history():
@@ -49,6 +55,13 @@ def save_history(data):
     os.makedirs(DATA_DIR, exist_ok=True)
     with open(HISTORY_FILE, 'w') as f:
         json.dump(data, f, indent=2, default=str)
+
+def log_request(entry):
+    """Thread-safe append to request history"""
+    with history_lock:
+        history = load_history()
+        history["requests"].append(entry)
+        save_history(history)
 
 # ── Request tracking from Docker logs (GIN lines only) ───────────
 last_log_ts = time.time()
@@ -78,7 +91,7 @@ def parse_duration(dur_str):
     return 0
 
 def parse_docker_logs():
-    """Parse GIN request lines from Docker logs. Model name comes from API."""
+    """Parse GIN request lines from Docker logs for direct-to-Ollama traffic."""
     global last_log_ts, seen_entries
     try:
         import docker
@@ -105,6 +118,10 @@ def parse_docker_logs():
             if path.strip() in ['/', '/api/tags', '/api/ps', '/api/version', '/api/show']:
                 continue
 
+            # Skip requests that came from the proxy (we already logged those with full data)
+            if proxy_self_ip and client_ip.strip() == proxy_self_ip:
+                continue
+
             dur_str = duration.strip()
             dur_ms = parse_duration(dur_str)
 
@@ -124,6 +141,10 @@ def parse_docker_logs():
                 "method": method.strip(),
                 "path": path.strip(),
                 "model": active_model,
+                "tokens": 0,
+                "prompt_tokens": 0,
+                "total_tokens": 0,
+                "source": "direct",
             }
 
             # Dedup check
@@ -140,7 +161,6 @@ def parse_docker_logs():
 
 # ── Ollama API helpers ───────────────────────────────────────────
 def get_ollama_version():
-    """Get Ollama version from API"""
     try:
         resp = requests.get(f"{OLLAMA_URL}/api/version", timeout=3)
         if resp.ok:
@@ -150,7 +170,6 @@ def get_ollama_version():
     return "unknown"
 
 def get_model_details(ps_data):
-    """Extract detailed model info from /api/ps response"""
     models = []
     for m in ps_data.get("models", []):
         detail = {
@@ -170,6 +189,170 @@ def get_model_details(ps_data):
         models.append(detail)
     return models
 
+def _fmt_bytes(b):
+    for u in ['B', 'KB', 'MB', 'GB']:
+        if b < 1024:
+            return f"{b:.1f} {u}"
+        b /= 1024
+    return f"{b:.1f} TB"
+
+def _fmt_duration(ms):
+    if ms < 1000:
+        return f"{ms:.0f}ms"
+    s = ms / 1000
+    if s < 60:
+        return f"{s:.1f}s"
+    m = int(s // 60)
+    s = s % 60
+    return f"{m}m{s:.0f}s"
+
+# ══════════════════════════════════════════════════════════════════
+#  OLLAMA API PROXY — runs on port 11434
+#  Forwards all requests to Ollama, captures token stats
+# ══════════════════════════════════════════════════════════════════
+
+@proxy_app.route('/', defaults={'path': ''}, methods=['GET', 'POST', 'PUT', 'DELETE', 'PATCH'])
+@proxy_app.route('/<path:path>', methods=['GET', 'POST', 'PUT', 'DELETE', 'PATCH'])
+def proxy_handler(path):
+    """Transparent proxy: forward to Ollama, capture token stats from responses."""
+    target_url = f"{OLLAMA_URL}/{path}"
+    client_ip = flask_request.remote_addr or "unknown"
+    start_ts = time.time()
+
+    # Forward headers (skip hop-by-hop)
+    skip_headers = {'host', 'transfer-encoding', 'connection'}
+    fwd_headers = {k: v for k, v in flask_request.headers if k.lower() not in skip_headers}
+
+    # Determine if this is a chat/generate request we should track
+    is_trackable = path in ('api/chat', 'api/generate')
+
+    # Get request body
+    body = flask_request.get_data()
+    body_json = None
+    is_streaming = True  # Ollama defaults to streaming
+
+    if body and is_trackable:
+        try:
+            body_json = json.loads(body)
+            is_streaming = body_json.get('stream', True)
+        except:
+            pass
+
+    try:
+        # Forward the request to Ollama
+        ollama_resp = requests.request(
+            method=flask_request.method,
+            url=target_url,
+            headers=fwd_headers,
+            data=body,
+            stream=True,
+            timeout=600
+        )
+
+        # Build response headers
+        resp_headers = {}
+        for k, v in ollama_resp.headers.items():
+            if k.lower() not in ('transfer-encoding', 'connection', 'content-encoding'):
+                resp_headers[k] = v
+
+        if is_trackable and is_streaming:
+            # ── Streaming: pass through chunks, capture final stats ──
+            def stream_and_capture():
+                model_name = body_json.get('model', '—') if body_json else '—'
+                final_stats = {}
+
+                for chunk in ollama_resp.iter_lines():
+                    if chunk:
+                        yield chunk + b'\n'
+                        try:
+                            data = json.loads(chunk)
+                            if data.get('done'):
+                                final_stats = data
+                        except:
+                            pass
+
+                # Log after stream completes
+                elapsed_ms = (time.time() - start_ts) * 1000
+                eval_tokens = final_stats.get('eval_count', 0)
+                prompt_tokens = final_stats.get('prompt_eval_count', 0)
+                eval_dur = final_stats.get('eval_duration', 0)
+                tok_per_sec = round(eval_tokens / max(eval_dur / 1e9, 0.001), 2) if eval_dur > 0 else 0
+
+                entry = {
+                    "time": datetime.now().isoformat(),
+                    "time_display": datetime.now().strftime("%Y/%m/%d - %H:%M:%S"),
+                    "status": ollama_resp.status_code,
+                    "duration": _fmt_duration(elapsed_ms),
+                    "duration_ms": round(elapsed_ms, 1),
+                    "client_ip": client_ip,
+                    "method": flask_request.method,
+                    "path": f"/{path}",
+                    "model": model_name,
+                    "tokens": eval_tokens,
+                    "prompt_tokens": prompt_tokens,
+                    "total_tokens": eval_tokens + prompt_tokens,
+                    "tokens_per_sec": tok_per_sec,
+                    "source": "proxy",
+                }
+                log_request(entry)
+
+            return Response(stream_and_capture(), status=ollama_resp.status_code, headers=resp_headers)
+
+        elif is_trackable and not is_streaming:
+            # ── Non-streaming: read full response, capture stats ──
+            resp_data = ollama_resp.content
+            elapsed_ms = (time.time() - start_ts) * 1000
+
+            try:
+                data = json.loads(resp_data)
+                model_name = data.get('model', body_json.get('model', '—') if body_json else '—')
+                eval_tokens = data.get('eval_count', 0)
+                prompt_tokens = data.get('prompt_eval_count', 0)
+                eval_dur = data.get('eval_duration', 0)
+                tok_per_sec = round(eval_tokens / max(eval_dur / 1e9, 0.001), 2) if eval_dur > 0 else 0
+            except:
+                model_name = body_json.get('model', '—') if body_json else '—'
+                eval_tokens = 0
+                prompt_tokens = 0
+                tok_per_sec = 0
+
+            entry = {
+                "time": datetime.now().isoformat(),
+                "time_display": datetime.now().strftime("%Y/%m/%d - %H:%M:%S"),
+                "status": ollama_resp.status_code,
+                "duration": _fmt_duration(elapsed_ms),
+                "duration_ms": round(elapsed_ms, 1),
+                "client_ip": client_ip,
+                "method": flask_request.method,
+                "path": f"/{path}",
+                "model": model_name,
+                "tokens": eval_tokens,
+                "prompt_tokens": prompt_tokens,
+                "total_tokens": eval_tokens + prompt_tokens,
+                "tokens_per_sec": tok_per_sec,
+                "source": "proxy",
+            }
+            log_request(entry)
+
+            return Response(resp_data, status=ollama_resp.status_code, headers=resp_headers)
+
+        else:
+            # ── Non-trackable: pure passthrough ──
+            def passthrough():
+                for chunk in ollama_resp.iter_content(chunk_size=8192):
+                    if chunk:
+                        yield chunk
+
+            return Response(passthrough(), status=ollama_resp.status_code, headers=resp_headers)
+
+    except requests.exceptions.ConnectionError:
+        return jsonify({"error": "Cannot connect to Ollama"}), 502
+    except requests.exceptions.Timeout:
+        return jsonify({"error": "Ollama request timed out"}), 504
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 # ── Background poller ────────────────────────────────────────────
 last_running = set()
 
@@ -182,14 +365,12 @@ def poll_loop():
             ps_data = ps_resp.json() if ps_resp.ok else {"models": []}
             tags_data = tags_resp.json() if tags_resp.ok else {"models": []}
 
-            # Track active model name for request history
             running_models = ps_data.get("models", [])
             if running_models:
                 active_model = running_models[0].get("name", "—")
             else:
                 active_model = "—"
 
-            # Get detailed model info and version from API
             model_details = get_model_details(ps_data)
             ollama_version = get_ollama_version()
 
@@ -243,7 +424,7 @@ def poll_loop():
 
         time.sleep(POLL_INTERVAL)
 
-# ── API Endpoints ────────────────────────────────────────────────
+# ── Dashboard API Endpoints ──────────────────────────────────────
 @app.route('/')
 def dashboard():
     return render_template('dashboard.html')
@@ -253,6 +434,7 @@ def api_status():
     data = dict(current_status)
     data["dashboard_start"] = start_time
     data["ollama_url"] = OLLAMA_URL
+    data["proxy_port"] = PROXY_PORT
     return jsonify(data)
 
 @app.route('/api/history')
@@ -363,25 +545,27 @@ def api_history_stats():
             file_size = os.path.getsize(HISTORY_FILE)
         except:
             pass
-        total_bench_tokens = sum(b.get("eval_count", 0) for b in history.get("benchmarks", []))
-        total_bench_prompt = sum(b.get("prompt_eval_count", 0) for b in history.get("benchmarks", []))
+        # Token stats from both proxied requests and benchmarks
+        req_gen_tokens = sum(r.get("tokens", 0) for r in history.get("requests", []))
+        req_prompt_tokens = sum(r.get("prompt_tokens", 0) for r in history.get("requests", []))
+        bench_gen_tokens = sum(b.get("eval_count", 0) for b in history.get("benchmarks", []))
+        bench_prompt_tokens = sum(b.get("prompt_eval_count", 0) for b in history.get("benchmarks", []))
+        total_gen = req_gen_tokens + bench_gen_tokens
+        total_prompt = req_prompt_tokens + bench_prompt_tokens
+        proxied = sum(1 for r in history.get("requests", []) if r.get("source") == "proxy")
+        direct = sum(1 for r in history.get("requests", []) if r.get("source") == "direct")
         return jsonify({
             "requests": len(history.get("requests", [])),
             "benchmarks": len(history.get("benchmarks", [])),
             "events": len(history.get("events", [])),
             "file_size_bytes": file_size,
             "file_size": _fmt_bytes(file_size),
-            "total_tokens": total_bench_tokens + total_bench_prompt,
-            "total_gen_tokens": total_bench_tokens,
-            "total_prompt_tokens": total_bench_prompt
+            "total_tokens": total_gen + total_prompt,
+            "total_gen_tokens": total_gen,
+            "total_prompt_tokens": total_prompt,
+            "proxied_requests": proxied,
+            "direct_requests": direct,
         })
-
-def _fmt_bytes(b):
-    for u in ['B', 'KB', 'MB', 'GB']:
-        if b < 1024:
-            return f"{b:.1f} {u}"
-        b /= 1024
-    return f"{b:.1f} TB"
 
 # ── Update Checker ───────────────────────────────────────────────
 @app.route('/api/updates')
@@ -445,6 +629,19 @@ def api_updates():
 
     return jsonify(results)
 
+# ── Detect own IP for GIN log filtering ──────────────────────────
+def detect_self_ip():
+    global proxy_self_ip
+    try:
+        import socket
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        proxy_self_ip = s.getsockname()[0]
+        s.close()
+        print(f"[PROXY] Detected self IP: {proxy_self_ip} (will filter from GIN logs)")
+    except:
+        print("[PROXY] Could not detect self IP — proxy requests may appear as duplicates in GIN logs")
+
 # ── Start ────────────────────────────────────────────────────────
 if __name__ == '__main__':
     os.makedirs(DATA_DIR, exist_ok=True)
@@ -455,9 +652,24 @@ if __name__ == '__main__':
         print(f"[DASHBOARD] Loaded {len(seen_entries)} existing entry hashes for dedup")
     except:
         pass
+
+    detect_self_ip()
+
+    # Start background poller
     threading.Thread(target=poll_loop, daemon=True).start()
-    print(f"[DASHBOARD] Ollama Monitor v2.3 starting on port 8088")
+
+    # Start proxy on port 11434 in background thread
+    def run_proxy():
+        print(f"[PROXY] Ollama API Proxy starting on port {PROXY_PORT}")
+        print(f"[PROXY] Forwarding to: {OLLAMA_URL}")
+        proxy_app.run(host='0.0.0.0', port=PROXY_PORT, debug=False, threaded=True)
+
+    threading.Thread(target=run_proxy, daemon=True).start()
+
+    # Start dashboard on port 8088
+    print(f"[DASHBOARD] Ollama Monitor v2.4 starting on port 8088")
     print(f"[DASHBOARD] Monitoring: {OLLAMA_URL}")
     print(f"[DASHBOARD] Container: {OLLAMA_CONTAINER}")
     print(f"[DASHBOARD] History: {HISTORY_FILE}")
-    app.run(host='0.0.0.0', port=8088, debug=False)
+    print(f"[DASHBOARD] Proxy: port {PROXY_PORT} → {OLLAMA_URL}")
+    app.run(host='0.0.0.0', port=8088, debug=False, threaded=True)
