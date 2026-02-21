@@ -2,6 +2,24 @@
 
 All notable changes to ollama-dashboard will be documented in this file.
 
+## [v0.8] - 2026-02-21
+
+### Added
+- **Settings page** — new nav tab with persistent server-side settings
+  - **Client mapping editor** — add/remove/edit IP-to-name mappings with emoji icons from the UI
+  - **Poll interval control** — adjust status polling frequency (1-60 seconds)
+  - **Auto-trim retention** — configure how long to keep history data
+  - **Theme sync** — optionally save theme/mode to server (persists across browsers)
+- **Event icons** — 🟢 load, 🔴 unload, ⚠️ warning, ❌ error in model events
+- **Settings API** — `GET/POST /api/settings` for persistent configuration
+- **Settings file** — `settings.json` persisted to `/data` volume
+
+### Changed
+- Client map now loaded from saved settings (falls back to `CLIENT_MAP` env var)
+- Backend poll loop uses saved poll interval instead of fixed env var
+- Frontend poll interval respects saved settings
+- Events display includes icon column and detail field
+
 ## [v0.7] - 2026-02-21
 
 ### Added

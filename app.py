@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Ollama Intel iGPU Monitoring Dashboard v0.7 — Backend + API Proxy"""
+"""Ollama Intel iGPU Monitoring Dashboard v0.8 — Backend + API Proxy"""
 
 from flask import Flask, jsonify, render_template, request as flask_request, Response
 import requests
@@ -29,6 +29,34 @@ try:
     CLIENT_MAP = json.loads(_cm)
 except:
     CLIENT_MAP = {}
+
+# Settings file (persisted to /data volume)
+SETTINGS_FILE = os.path.join(DATA_DIR, 'settings.json')
+
+def load_settings():
+    try:
+        if os.path.exists(SETTINGS_FILE):
+            with open(SETTINGS_FILE, 'r') as f:
+                return json.load(f)
+    except:
+        pass
+    return {}
+
+def save_settings(data):
+    try:
+        os.makedirs(DATA_DIR, exist_ok=True)
+        with open(SETTINGS_FILE, 'w') as f:
+            json.dump(data, f, indent=2)
+    except Exception as e:
+        print(f"[SETTINGS] Save error: {e}")
+
+def get_client_map():
+    settings = load_settings()
+    return settings.get('client_map', CLIENT_MAP)
+
+def get_poll_interval():
+    settings = load_settings()
+    return settings.get('poll_interval', POLL_INTERVAL)
 
 history_lock = threading.Lock()
 current_status = {"status": "starting", "running": {"models": []}, "models": {"models": []}}
@@ -464,7 +492,7 @@ def poll_loop():
                 "polled_at": datetime.now().isoformat()
             }
 
-        time.sleep(POLL_INTERVAL)
+        time.sleep(get_poll_interval())
 
 # ── Dashboard API Endpoints ──────────────────────────────────────
 @app.route('/')
@@ -473,7 +501,33 @@ def dashboard():
 
 @app.route('/api/client-map')
 def api_client_map():
-    return jsonify(CLIENT_MAP)
+    return jsonify(get_client_map())
+
+@app.route('/api/settings', methods=['GET'])
+def api_settings_get():
+    settings = load_settings()
+    # Merge defaults
+    defaults = {
+        'poll_interval': POLL_INTERVAL,
+        'client_map': CLIENT_MAP,
+        'retention_months': 6,
+        'theme': 'terminal',
+        'mode': 'dark',
+    }
+    for k, v in defaults.items():
+        settings.setdefault(k, v)
+    return jsonify(settings)
+
+@app.route('/api/settings', methods=['POST'])
+def api_settings_save():
+    data = request.get_json(force=True)
+    settings = load_settings()
+    allowed = ['poll_interval', 'client_map', 'retention_months', 'theme', 'mode', 'sync_theme']
+    for k in allowed:
+        if k in data:
+            settings[k] = data[k]
+    save_settings(settings)
+    return jsonify({"ok": True})
 
 @app.route('/api/status')
 def api_status():
@@ -714,7 +768,7 @@ if __name__ == '__main__':
     threading.Thread(target=run_proxy, daemon=True).start()
 
     # Start dashboard on port 8088
-    print(f"[DASHBOARD] Ollama Monitor v0.7 starting on port 8088")
+    print(f"[DASHBOARD] Ollama Monitor v0.8 starting on port 8088")
     print(f"[DASHBOARD] Monitoring: {OLLAMA_URL}")
     print(f"[DASHBOARD] Container: {OLLAMA_CONTAINER}")
     print(f"[DASHBOARD] History: {HISTORY_FILE}")
