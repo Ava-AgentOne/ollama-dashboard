@@ -217,6 +217,7 @@ def proxy_handler(path):
     """Transparent proxy: forward to Ollama, capture token stats from responses."""
     target_url = f"{OLLAMA_URL}/{path}"
     client_ip = flask_request.remote_addr or "unknown"
+    method = flask_request.method
     start_ts = time.time()
 
     # Forward headers (skip hop-by-hop)
@@ -238,10 +239,13 @@ def proxy_handler(path):
         except:
             pass
 
+    # Capture path now (request context won't be available inside generators)
+    req_path = f"/{path}"
+
     try:
         # Forward the request to Ollama
         ollama_resp = requests.request(
-            method=flask_request.method,
+            method=method,
             url=target_url,
             headers=fwd_headers,
             data=body,
@@ -290,8 +294,8 @@ def proxy_handler(path):
                     "duration": _fmt_duration(elapsed_ms),
                     "duration_ms": round(elapsed_ms, 1),
                     "client_ip": client_ip,
-                    "method": flask_request.method,
-                    "path": f"/{path}",
+                    "method": method,
+                    "path": req_path,
                     "model": model_name,
                     "tokens": eval_tokens,
                     "prompt_tokens": prompt_tokens,
@@ -334,8 +338,8 @@ def proxy_handler(path):
                 "duration": _fmt_duration(elapsed_ms),
                 "duration_ms": round(elapsed_ms, 1),
                 "client_ip": client_ip,
-                "method": flask_request.method,
-                "path": f"/{path}",
+                "method": method,
+                "path": req_path,
                 "model": model_name,
                 "tokens": eval_tokens,
                 "prompt_tokens": prompt_tokens,
