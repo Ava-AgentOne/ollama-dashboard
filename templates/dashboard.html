@@ -336,6 +336,21 @@ tr:hover td { background:var(--glow-1); }
 .event-model { color:var(--accent-3); }
 
 /* ── Controls bar ────────────────────────────────────────────── */
+
+/* ── Chart toolbar ──────────────────────────────────────────── */
+.chart-toolbar {
+  display:flex; align-items:center; justify-content:space-between;
+  padding:8px 14px; border-bottom:1px solid var(--border); flex-wrap:wrap; gap:8px;
+}
+.chart-toggles { display:flex; gap:4px; flex-wrap:wrap; }
+.chart-toggle {
+  background:var(--bg-deep); border:1px solid var(--border); color:var(--text-dim);
+  font-family:var(--font-body); font-size:12px; padding:4px 10px;
+  border-radius:var(--radius); cursor:pointer; transition:all 0.2s; letter-spacing:0.5px;
+}
+.chart-toggle:hover { border-color:var(--accent-1); color:var(--accent-1); }
+.chart-toggle.active { border-color:var(--accent-1); color:var(--accent-1); background:var(--glow-1); }
+.chart-filters { display:flex; gap:6px; align-items:center; }
 .controls-bar {
   display:flex; align-items:center; justify-content:space-between;
   padding:12px 20px; border-top:1px solid var(--border); background:var(--bg-panel);
@@ -547,16 +562,32 @@ tr:hover td { background:var(--glow-1); }
     </div>
   </div>
 
-  <!-- tok/s Chart -->
+  <!-- Charts Section -->
   <div class="grid-full">
     <div class="panel">
       <div class="panel-header">
-        <div class="panel-title">Generation Speed Over Time</div>
+        <div class="panel-title">Analytics</div>
         <div class="panel-badge" id="chartAvgTps">—</div>
       </div>
+      <div class="chart-toolbar">
+        <div class="chart-toggles">
+          <button class="chart-toggle active" data-mode="tps" onclick="setChartMode('tps',this)">tok/s</button>
+          <button class="chart-toggle" data-mode="tokens" onclick="setChartMode('tokens',this)">Total Tokens</button>
+          <button class="chart-toggle" data-mode="inout" onclick="setChartMode('inout',this)">In vs Out</button>
+          <button class="chart-toggle" data-mode="usage" onclick="setChartMode('usage',this)">Daily Usage</button>
+          <button class="chart-toggle" data-mode="models" onclick="setChartMode('models',this)">By Model</button>
+        </div>
+        <div class="chart-filters">
+          <select class="input" id="chartClientFilter" onchange="renderMainChart()" style="font-size:12px;padding:4px 8px;">
+            <option value="all">All Clients</option>
+          </select>
+        </div>
+      </div>
       <div class="panel-body">
-        <canvas id="tpsChart" style="width:100%;height:180px;"></canvas>
-        <div class="empty" id="tpsChartEmpty" style="display:none;">Not enough proxied requests to chart</div>
+        <div style="position:relative;height:240px;">
+          <canvas id="mainChart"></canvas>
+        </div>
+        <div class="empty" id="mainChartEmpty" style="display:none;">Not enough data to chart</div>
       </div>
     </div>
   </div>
@@ -651,6 +682,8 @@ let sortState = { col: 'time', dir: 'desc' };
 const pageSize = 50;
 let currentPageCount = 50;
 let ollamaStartTime = null;
+let chartMode = 'tps';
+let mainChartInstance = null;
 
 // ── Client Name Mapping ─────────────────────────────────────
 // Auto-populated from server config, or add your own mappings
@@ -675,6 +708,7 @@ function setTheme(theme) {
   document.documentElement.setAttribute('data-theme', theme);
   localStorage.setItem('ollama-theme', theme);
   if (benchChart) rebuildChart();
+  renderMainChart();
 }
 function toggleMode() {
   const html = document.documentElement;
@@ -683,6 +717,7 @@ function toggleMode() {
   localStorage.setItem('ollama-mode', mode);
   document.getElementById('modeLabel').textContent = mode.toUpperCase();
   if (benchChart) rebuildChart();
+  renderMainChart();
 }
 function loadThemePrefs() {
   const t = localStorage.getItem('ollama-theme') || 'terminal';
@@ -924,91 +959,289 @@ async function fetchHistory() {
   } catch(e){}
 }
 
-function renderTokChart(reqs) {
-  const canvas = document.getElementById('tpsChart');
-  const emptyMsg = document.getElementById('tpsChartEmpty');
-  const badge = document.getElementById('chartAvgTps');
-  const ctx = canvas.getContext('2d');
+function setChartMode(mode, el) {
+  chartMode = mode;
+  document.querySelectorAll('.chart-toggle').forEach(b => b.classList.remove('active'));
+  el.classList.add('active');
+  renderMainChart();
+}
 
-  const points = reqs.filter(r => r.source==='proxy' && r.tokens_per_sec > 0).reverse();
+function getChartThemeColors() {
+  const s = getComputedStyle(document.documentElement);
+  return {
+    accent1: s.getPropertyValue('--accent-1').trim(),
+    accent2: s.getPropertyValue('--accent-2').trim(),
+    accent3: s.getPropertyValue('--accent-3').trim(),
+    accent4: s.getPropertyValue('--accent-4').trim(),
+    dim: s.getPropertyValue('--text-dim').trim(),
+    muted: s.getPropertyValue('--text-muted').trim(),
+    border: s.getPropertyValue('--border').trim(),
+    panel: s.getPropertyValue('--bg-panel').trim(),
+  };
+}
 
-  if (points.length < 2) {
-    canvas.style.display='none'; emptyMsg.style.display='block';
-    badge.textContent = '—';
-    return;
+function getFilteredChartData() {
+  const filtered = filterEntries(allHistory.requests||[], currentFilter);
+  const sorted = sortEntries(filtered);
+  const clientFilter = document.getElementById('chartClientFilter')?.value || 'all';
+  let data = sorted.slice().reverse(); // chronological
+  if (clientFilter !== 'all') {
+    data = data.filter(r => r.client_ip === clientFilter);
   }
+  return data;
+}
+
+function updateClientDropdown(reqs) {
+  const sel = document.getElementById('chartClientFilter');
+  const prev = sel.value;
+  const ips = [...new Set(reqs.map(r=>r.client_ip).filter(Boolean))];
+  let html = '<option value="all">All Clients</option>';
+  ips.forEach(ip => {
+    const c = getClient(ip);
+    html += `<option value="${ip}" ${ip===prev?'selected':''}>${c.icon} ${c.name}</option>`;
+  });
+  sel.innerHTML = html;
+}
+
+function renderMainChart() {
+  const canvas = document.getElementById('mainChart');
+  const emptyMsg = document.getElementById('mainChartEmpty');
+  const badge = document.getElementById('chartAvgTps');
+  const c = getChartThemeColors();
+
+  const data = getFilteredChartData();
+  const proxied = data.filter(r => r.source==='proxy' && r.tokens_per_sec > 0);
+
+  // Destroy old chart
+  if (mainChartInstance) { mainChartInstance.destroy(); mainChartInstance = null; }
+
+  if (chartMode === 'models') {
+    return renderModelsChart(canvas, emptyMsg, badge, data, c);
+  }
+  if (chartMode === 'usage') {
+    return renderUsageChart(canvas, emptyMsg, badge, data, c);
+  }
+
+  // Line chart modes: tps, tokens, inout
+  let points, datasets, yLabel, badgeText;
+
+  if (chartMode === 'tps') {
+    points = proxied;
+    if (points.length < 2) {
+      canvas.style.display='none'; emptyMsg.style.display='block';
+      badge.textContent = '—'; return;
+    }
+    const vals = points.map(p=>p.tokens_per_sec);
+    const avg = vals.reduce((a,b)=>a+b,0)/vals.length;
+    const peak = Math.max(...vals);
+    badgeText = `avg ${avg.toFixed(1)} · peak ${peak.toFixed(1)} tok/s`;
+    datasets = [{
+      label:'tok/s', data:vals, borderColor:c.accent1,
+      backgroundColor:c.accent1+'18', fill:true, tension:0.3,
+      pointRadius:points.length>50?0:3, pointHoverRadius:5, borderWidth:2
+    }];
+    yLabel = 'tok/s';
+  } else if (chartMode === 'tokens') {
+    points = data.filter(r=>r.total_tokens>0);
+    if (points.length < 2) {
+      canvas.style.display='none'; emptyMsg.style.display='block';
+      badge.textContent = '—'; return;
+    }
+    const vals = points.map(p=>p.total_tokens||0);
+    const total = vals.reduce((a,b)=>a+b,0);
+    badgeText = `${fmtNum(total)} total tokens`;
+    datasets = [{
+      label:'Total Tokens', data:vals, borderColor:c.accent3,
+      backgroundColor:c.accent3+'18', fill:true, tension:0.3,
+      pointRadius:points.length>50?0:3, pointHoverRadius:5, borderWidth:2
+    }];
+    yLabel = 'tokens';
+  } else if (chartMode === 'inout') {
+    points = data.filter(r=>(r.prompt_tokens>0)||(r.tokens>0));
+    if (points.length < 2) {
+      canvas.style.display='none'; emptyMsg.style.display='block';
+      badge.textContent = '—'; return;
+    }
+    const totalIn = points.reduce((s,r)=>s+(r.prompt_tokens||0),0);
+    const totalOut = points.reduce((s,r)=>s+(r.tokens||0),0);
+    badgeText = `${fmtNum(totalIn)} in · ${fmtNum(totalOut)} out`;
+    datasets = [
+      { label:'In (prompt)', data:points.map(p=>p.prompt_tokens||0), borderColor:c.accent3,
+        backgroundColor:c.accent3+'18', fill:true, tension:0.3, pointRadius:0, pointHoverRadius:4, borderWidth:2 },
+      { label:'Out (generated)', data:points.map(p=>p.tokens||0), borderColor:c.accent1,
+        backgroundColor:c.accent1+'18', fill:true, tension:0.3, pointRadius:0, pointHoverRadius:4, borderWidth:2 }
+    ];
+    yLabel = 'tokens';
+  }
+
+  canvas.style.display='block'; emptyMsg.style.display='none';
+  badge.textContent = badgeText;
+
+  const labels = points.map(p => {
+    try { return new Date(p.time).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'}); }
+    catch { return '?'; }
+  });
+
+  mainChartInstance = new Chart(canvas, {
+    type:'line',
+    data:{ labels, datasets },
+    options:{
+      responsive:true, maintainAspectRatio:false,
+      interaction:{ mode:'index', intersect:false },
+      plugins:{
+        legend:{ display:datasets.length>1, labels:{ color:c.dim, font:{family:'JetBrains Mono',size:11}, usePointStyle:true, pointStyle:'line' }},
+        tooltip:{
+          backgroundColor:c.panel, borderColor:c.border, borderWidth:1,
+          titleFont:{family:'JetBrains Mono',size:11}, bodyFont:{family:'JetBrains Mono',size:12},
+          titleColor:c.dim, bodyColor:c.accent1, padding:10,
+          callbacks:{
+            title: items => {
+              const idx = items[0]?.dataIndex;
+              if (idx!==undefined && points[idx]) return fmtTime(points[idx].time);
+              return '';
+            },
+            afterBody: items => {
+              const idx = items[0]?.dataIndex;
+              if (idx!==undefined && points[idx]) {
+                const r = points[idx];
+                const client = getClient(r.client_ip);
+                const lines = [`${client.icon} ${client.name}`];
+                if (r.model) lines.push(`Model: ${r.model}`);
+                return lines;
+              }
+              return [];
+            }
+          }
+        }
+      },
+      scales:{
+        x:{ticks:{color:c.muted, font:{family:'JetBrains Mono',size:9}, maxTicksLimit:8, maxRotation:0},
+          grid:{color:c.border+'40'}},
+        y:{ticks:{color:c.muted, font:{family:'JetBrains Mono',size:9}, callback:v=>chartMode==='tps'?v+' t/s':fmtNum(v)},
+          grid:{color:c.border+'40'}}
+      }
+    }
+  });
+}
+
+function renderUsageChart(canvas, emptyMsg, badge, data, c) {
+  const withTokens = data.filter(r=>(r.prompt_tokens>0)||(r.tokens>0));
+  if (withTokens.length < 1) {
+    canvas.style.display='none'; emptyMsg.style.display='block';
+    badge.textContent='—'; return;
+  }
+
+  // Group by day
+  const days = {};
+  withTokens.forEach(r => {
+    const day = (r.time||'').substring(0,10); // YYYY-MM-DD
+    if (!days[day]) days[day] = { in:0, out:0 };
+    days[day].in += r.prompt_tokens||0;
+    days[day].out += r.tokens||0;
+  });
+
+  const sortedDays = Object.keys(days).sort();
+  if (sortedDays.length < 1) {
+    canvas.style.display='none'; emptyMsg.style.display='block';
+    badge.textContent='—'; return;
+  }
+
+  const totalIn = sortedDays.reduce((s,d)=>s+days[d].in,0);
+  const totalOut = sortedDays.reduce((s,d)=>s+days[d].out,0);
+  badge.textContent = `${fmtNum(totalIn)} in · ${fmtNum(totalOut)} out over ${sortedDays.length} days`;
   canvas.style.display='block'; emptyMsg.style.display='none';
 
-  const rect = canvas.parentElement.getBoundingClientRect();
-  const dpr = window.devicePixelRatio || 1;
-  canvas.width = rect.width * dpr;
-  canvas.height = 180 * dpr;
-  canvas.style.height = '180px';
-  ctx.scale(dpr, dpr);
-  const W = rect.width, H = 180;
+  const labels = sortedDays.map(d => {
+    try { const dt=new Date(d+'T00:00:00'); return dt.toLocaleDateString('en-GB',{day:'2-digit',month:'short'}); }
+    catch { return d; }
+  });
 
-  const values = points.map(p => p.tokens_per_sec);
-  const avg = values.reduce((a,b)=>a+b,0) / values.length;
-  badge.textContent = avg.toFixed(1) + ' avg tok/s';
+  mainChartInstance = new Chart(canvas, {
+    type:'bar',
+    data:{
+      labels,
+      datasets:[
+        { label:'In (prompt)', data:sortedDays.map(d=>days[d].in), backgroundColor:c.accent3+'99', borderColor:c.accent3, borderWidth:1 },
+        { label:'Out (generated)', data:sortedDays.map(d=>days[d].out), backgroundColor:c.accent1+'99', borderColor:c.accent1, borderWidth:1 }
+      ]
+    },
+    options:{
+      responsive:true, maintainAspectRatio:false,
+      plugins:{
+        legend:{ display:true, labels:{ color:c.dim, font:{family:'JetBrains Mono',size:11}, usePointStyle:true, pointStyle:'rect' }},
+        tooltip:{
+          backgroundColor:c.panel, borderColor:c.border, borderWidth:1,
+          titleFont:{family:'JetBrains Mono',size:11}, bodyFont:{family:'JetBrains Mono',size:12},
+          titleColor:c.dim, bodyColor:c.accent1, padding:10
+        }
+      },
+      scales:{
+        x:{ stacked:true, ticks:{color:c.muted, font:{family:'JetBrains Mono',size:9}, maxRotation:0}, grid:{color:c.border+'40'} },
+        y:{ stacked:true, ticks:{color:c.muted, font:{family:'JetBrains Mono',size:9}, callback:v=>fmtNum(v)}, grid:{color:c.border+'40'} }
+      }
+    }
+  });
+}
 
-  const maxV = Math.max(...values) * 1.15;
-  const minV = 0;
-  const pad = { top: 20, right: 16, bottom: 30, left: 48 };
-  const cW = W - pad.left - pad.right;
-  const cH = H - pad.top - pad.bottom;
-
-  ctx.clearRect(0, 0, W, H);
-  const style = getComputedStyle(document.documentElement);
-  const accent = style.getPropertyValue('--accent-1').trim() || '#00ff88';
-  const accent2 = style.getPropertyValue('--accent-4').trim() || '#ff6644';
-  const dimColor = style.getPropertyValue('--text-dim').trim() || '#666';
-  const lineColor = style.getPropertyValue('--border').trim() || '#333';
-
-  ctx.strokeStyle = lineColor; ctx.lineWidth = 0.5;
-  const gridLines = 4;
-  ctx.font = '11px monospace'; ctx.fillStyle = dimColor; ctx.textAlign = 'right';
-  for (let i = 0; i <= gridLines; i++) {
-    const y = pad.top + (cH / gridLines) * i;
-    const val = maxV - (maxV / gridLines) * i;
-    ctx.beginPath(); ctx.moveTo(pad.left, y); ctx.lineTo(W - pad.right, y); ctx.stroke();
-    ctx.fillText(val.toFixed(1), pad.left - 6, y + 4);
+function renderModelsChart(canvas, emptyMsg, badge, data, c) {
+  const proxied = data.filter(r => r.source==='proxy' && r.tokens_per_sec > 0 && r.model);
+  if (proxied.length < 1) {
+    canvas.style.display='none'; emptyMsg.style.display='block';
+    badge.textContent='—'; return;
   }
 
-  ctx.strokeStyle = accent; ctx.lineWidth = 2; ctx.lineJoin = 'round';
-  ctx.beginPath();
-  for (let i = 0; i < values.length; i++) {
-    const x = pad.left + (i / (values.length - 1)) * cW;
-    const y = pad.top + cH - ((values[i] - minV) / (maxV - minV)) * cH;
-    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-  }
-  ctx.stroke();
+  // Group by model
+  const models = {};
+  proxied.forEach(r => {
+    if (!models[r.model]) models[r.model] = { sum:0, count:0, peak:0 };
+    models[r.model].sum += r.tokens_per_sec;
+    models[r.model].count++;
+    models[r.model].peak = Math.max(models[r.model].peak, r.tokens_per_sec);
+  });
 
-  const lastX = pad.left + cW;
-  ctx.lineTo(lastX, pad.top + cH);
-  ctx.lineTo(pad.left, pad.top + cH);
-  ctx.closePath();
-  const grad = ctx.createLinearGradient(0, pad.top, 0, pad.top + cH);
-  grad.addColorStop(0, accent + '30');
-  grad.addColorStop(1, accent + '05');
-  ctx.fillStyle = grad;
-  ctx.fill();
+  const names = Object.keys(models).sort((a,b) => (models[b].sum/models[b].count) - (models[a].sum/models[a].count));
+  const avgs = names.map(n => models[n].sum / models[n].count);
+  const peaks = names.map(n => models[n].peak);
 
-  const avgY = pad.top + cH - ((avg - minV) / (maxV - minV)) * cH;
-  ctx.strokeStyle = accent2; ctx.lineWidth = 1; ctx.setLineDash([4,4]);
-  ctx.beginPath(); ctx.moveTo(pad.left, avgY); ctx.lineTo(W - pad.right, avgY); ctx.stroke();
-  ctx.setLineDash([]);
-  ctx.fillStyle = accent2; ctx.textAlign = 'left'; ctx.font = '10px monospace';
-  ctx.fillText('avg ' + avg.toFixed(1), W - pad.right - 50, avgY - 5);
+  badge.textContent = `${names.length} model(s) compared`;
+  canvas.style.display='block'; emptyMsg.style.display='none';
 
-  ctx.fillStyle = dimColor; ctx.font = '10px monospace'; ctx.textAlign = 'center';
-  const labelIdxs = [0, Math.floor(points.length/2), points.length-1];
-  for (const idx of labelIdxs) {
-    if (idx >= points.length) continue;
-    const x = pad.left + (idx / (values.length - 1)) * cW;
-    const t = points[idx].time || '';
-    const short = t.includes('T') ? t.split('T')[1]?.substring(0,5) : t.substring(11,16);
-    ctx.fillText(short || '', x, H - 8);
-  }
+  const colors = [c.accent1, c.accent3, c.accent2, c.accent4, '#ff6b9d', '#c084fc'];
+
+  mainChartInstance = new Chart(canvas, {
+    type:'bar',
+    data:{
+      labels: names.map(n => n.length > 20 ? n.substring(0,18)+'…' : n),
+      datasets:[
+        { label:'Avg tok/s', data:avgs, backgroundColor:names.map((_,i) => (colors[i%colors.length])+'99'),
+          borderColor:names.map((_,i) => colors[i%colors.length]), borderWidth:1 },
+        { label:'Peak tok/s', data:peaks, backgroundColor:names.map((_,i) => (colors[i%colors.length])+'33'),
+          borderColor:names.map((_,i) => colors[i%colors.length]), borderWidth:1, borderDash:[3,3] }
+      ]
+    },
+    options:{
+      responsive:true, maintainAspectRatio:false, indexAxis:'y',
+      plugins:{
+        legend:{ display:true, labels:{ color:c.dim, font:{family:'JetBrains Mono',size:11}, usePointStyle:true, pointStyle:'rect' }},
+        tooltip:{
+          backgroundColor:c.panel, borderColor:c.border, borderWidth:1,
+          titleFont:{family:'JetBrains Mono',size:11}, bodyFont:{family:'JetBrains Mono',size:12},
+          titleColor:c.dim, bodyColor:c.accent1, padding:10,
+          callbacks:{
+            afterBody: items => {
+              const idx = items[0]?.dataIndex;
+              if (idx!==undefined) return [`Runs: ${models[names[idx]].count}`];
+              return [];
+            }
+          }
+        }
+      },
+      scales:{
+        x:{ ticks:{color:c.muted, font:{family:'JetBrains Mono',size:9}, callback:v=>v+' t/s'}, grid:{color:c.border+'40'} },
+        y:{ ticks:{color:c.dim, font:{family:'JetBrains Mono',size:10}}, grid:{display:false} }
+      }
+    }
+  });
 }
 
 function renderHistory() {
@@ -1076,8 +1309,9 @@ function renderHistory() {
     hb.innerHTML = rows;
   }
 
-  // Chart uses all filtered data (not paginated)
-  renderTokChart(sorted);
+  // Update chart client dropdown and render chart
+  updateClientDropdown(sorted);
+  renderMainChart();
 
   // Events
   const events=(allHistory.events||[]).slice().reverse();

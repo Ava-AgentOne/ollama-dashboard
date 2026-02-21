@@ -2,6 +2,25 @@
 
 All notable changes to ollama-dashboard will be documented in this file.
 
+## [v0.7] - 2026-02-21
+
+### Added
+- **Multi-mode chart system** with 5 views:
+  - **tok/s** — generation speed over time (line chart with tooltips)
+  - **Total Tokens** — tokens per request over time
+  - **In vs Out** — prompt vs generated tokens overlaid
+  - **Daily Usage** — stacked bar chart of daily token consumption
+  - **By Model** — horizontal bar chart comparing avg/peak tok/s per model
+- **Chart toggle buttons** to switch between views
+- **Per-client filter dropdown** — filter chart data by specific client
+- **Rich hover tooltips** — shows time, client name, model on hover
+- **Theme-aware charts** — colors update on theme/mode switch
+
+### Changed
+- Replaced custom canvas drawing with Chart.js for all analytics
+- Chart height increased to 240px for better readability
+- Panel renamed from "Generation Speed Over Time" to "Analytics"
+
 ## [v0.6] - 2026-02-21
 
 ### Added
