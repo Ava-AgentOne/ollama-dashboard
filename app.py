@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Ollama Intel iGPU Monitoring Dashboard v0.9 — Backend + API Proxy"""
+"""Ollama Intel iGPU Monitoring Dashboard v1.0 — Backend + API Proxy"""
 
-from flask import Flask, jsonify, render_template, request as flask_request, Response
+from flask import Flask, jsonify, render_template, request as flask_request, Response, session, redirect, url_for
+from functools import wraps
 import requests
 import json
 import os
@@ -9,10 +10,12 @@ import time
 import threading
 import re
 import hashlib
+import secrets
 from datetime import datetime, timedelta
 
 # ── Two Flask apps: Dashboard (8088) + Proxy (11434) ────────────
 app = Flask(__name__)
+app.secret_key = os.environ.get('SECRET_KEY', secrets.token_hex(32))
 proxy_app = Flask(__name__ + '_proxy')
 
 # ── Configuration ────────────────────────────────────────────────
@@ -22,6 +25,22 @@ DATA_DIR = os.environ.get('DATA_DIR', '/data')
 HISTORY_FILE = os.path.join(DATA_DIR, 'history.json')
 POLL_INTERVAL = int(os.environ.get('POLL_INTERVAL', 5))
 PROXY_PORT = int(os.environ.get('PROXY_PORT', 11434))
+
+# Authentication — empty = no auth required
+DASHBOARD_PASSWORD = os.environ.get('DASHBOARD_PASSWORD', '')
+
+def login_required(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if not DASHBOARD_PASSWORD:
+            return f(*args, **kwargs)
+        if session.get('authenticated'):
+            return f(*args, **kwargs)
+        # API calls get 401 JSON, browser gets redirect
+        if flask_request.path.startswith('/api/'):
+            return jsonify({"error": "unauthorized"}), 401
+        return redirect(url_for('login_page'))
+    return decorated
 
 # Client name mapping (JSON string from env, or empty)
 _cm = os.environ.get('CLIENT_MAP', '{}')
@@ -495,10 +514,35 @@ def poll_loop():
         time.sleep(get_poll_interval())
 
 # ── Dashboard API Endpoints ──────────────────────────────────────
-@app.route('/')
-def dashboard():
-    return render_template('dashboard.html')
 
+# ── Auth routes (unprotected) ──
+@app.route('/login', methods=['GET'])
+def login_page():
+    if not DASHBOARD_PASSWORD or session.get('authenticated'):
+        return redirect(url_for('dashboard'))
+    return render_template('login.html')
+
+@app.route('/login', methods=['POST'])
+def login_submit():
+    data = flask_request.get_json(force=True) if flask_request.is_json else {}
+    password = data.get('password', flask_request.form.get('password', ''))
+    if password == DASHBOARD_PASSWORD:
+        session['authenticated'] = True
+        session.permanent = True
+        app.permanent_session_lifetime = timedelta(days=30)
+        if flask_request.is_json:
+            return jsonify({"ok": True})
+        return redirect(url_for('dashboard'))
+    if flask_request.is_json:
+        return jsonify({"error": "wrong password"}), 401
+    return render_template('login.html', error="Wrong password")
+
+@app.route('/logout')
+def logout():
+    session.clear()
+    return redirect(url_for('login_page'))
+
+# ── PWA assets (unprotected) ──
 @app.route('/sw.js')
 def service_worker():
     return app.send_static_file('sw.js')
@@ -507,11 +551,19 @@ def service_worker():
 def manifest():
     return app.send_static_file('manifest.json')
 
+# ── Protected routes ──
+@app.route('/')
+@login_required
+def dashboard():
+    return render_template('dashboard.html')
+
 @app.route('/api/client-map')
+@login_required
 def api_client_map():
     return jsonify(get_client_map())
 
 @app.route('/api/settings', methods=['GET'])
+@login_required
 def api_settings_get():
     settings = load_settings()
     # Merge defaults
@@ -524,9 +576,11 @@ def api_settings_get():
     }
     for k, v in defaults.items():
         settings.setdefault(k, v)
+    settings['auth_enabled'] = bool(DASHBOARD_PASSWORD)
     return jsonify(settings)
 
 @app.route('/api/settings', methods=['POST'])
+@login_required
 def api_settings_save():
     data = flask_request.get_json(force=True)
     settings = load_settings()
@@ -538,6 +592,7 @@ def api_settings_save():
     return jsonify({"ok": True})
 
 @app.route('/api/status')
+@login_required
 def api_status():
     data = dict(current_status)
     data["dashboard_start"] = start_time
@@ -547,11 +602,13 @@ def api_status():
     return jsonify(data)
 
 @app.route('/api/history')
+@login_required
 def api_history():
     with history_lock:
         return jsonify(load_history())
 
 @app.route('/api/benchmark', methods=['POST'])
+@login_required
 def api_benchmark():
     body = flask_request.json or {}
     model = body.get('model', '')
@@ -602,6 +659,7 @@ def api_benchmark():
         return jsonify({"error": str(e)}), 500
 
 @app.route('/api/trim', methods=['POST'])
+@login_required
 def api_trim():
     body = flask_request.json or {}
     mode = body.get('mode', 'count')
@@ -632,12 +690,14 @@ def api_trim():
     return jsonify({"error": "Invalid mode"}), 400
 
 @app.route('/api/clear', methods=['POST'])
+@login_required
 def api_clear():
     with history_lock:
         save_history({"requests": [], "benchmarks": [], "events": []})
     return jsonify({"status": "cleared"})
 
 @app.route('/api/history/export')
+@login_required
 def api_export():
     with history_lock:
         history = load_history()
@@ -646,6 +706,7 @@ def api_export():
     }
 
 @app.route('/api/history/stats')
+@login_required
 def api_history_stats():
     with history_lock:
         history = load_history()
@@ -678,6 +739,7 @@ def api_history_stats():
 
 # ── Update Checker ───────────────────────────────────────────────
 @app.route('/api/updates')
+@login_required
 def api_updates():
     results = {"dashboard_packages": [], "base_image": {}, "checked_at": datetime.now().isoformat()}
 
@@ -776,7 +838,7 @@ if __name__ == '__main__':
     threading.Thread(target=run_proxy, daemon=True).start()
 
     # Start dashboard on port 8088
-    print(f"[DASHBOARD] Ollama Monitor v0.9 starting on port 8088")
+    print(f"[DASHBOARD] Ollama Monitor v1.0 starting on port 8088")
     print(f"[DASHBOARD] Monitoring: {OLLAMA_URL}")
     print(f"[DASHBOARD] Container: {OLLAMA_CONTAINER}")
     print(f"[DASHBOARD] History: {HISTORY_FILE}")
