@@ -2,6 +2,27 @@
 
 All notable changes to ollama-dashboard will be documented in this file.
 
+## [v1.0] - 2026-02-21
+
+### Added
+- **Password protection** — optional login page with themed UI
+  - Set `DASHBOARD_PASSWORD` env var to enable
+  - Session cookie persists for 30 days
+  - All dashboard and API routes protected when enabled
+  - Proxy port (11434) remains open for Ollama clients
+  - Logout button appears in nav when auth is active
+- **API documentation page** — new "API" nav tab documenting all endpoints
+  - Dashboard API endpoints with methods, paths, and body examples
+  - Proxy endpoint documentation
+  - Auth endpoint docs (shown only when auth is enabled)
+- **Login page** — styled to match dashboard theme with animated logo
+
+### Changed
+- Version bump to v1.0 — production ready
+- Settings API returns `auth_enabled` flag for UI state
+- Unraid template includes `DASHBOARD_PASSWORD` and `SECRET_KEY` config
+- All API routes return 401 JSON when unauthenticated
+
 ## [v0.9] - 2026-02-21
 
 ### Added

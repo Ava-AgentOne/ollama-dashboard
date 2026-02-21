@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="terminal" data-mode="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#060a0e">
+<link rel="manifest" href="/manifest.json">
+<link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
+<title>Login — Ollama Control Center</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg-deep:#060a0e; --bg-panel:#0c1117; --border:#1a2736; --border-glow:#1e3a50;
+  --text-primary:#c8d4de; --text-dim:#5a6a7a; --text-muted:#3a4a5a;
+  --accent-1:#00e87b; --accent-err:#ff3b4a;
+  --glow-1:rgba(0,232,123,0.15);
+  --font-display:'Share Tech Mono', monospace; --font-body:'JetBrains Mono', monospace;
+}
+* { margin:0; padding:0; box-sizing:border-box; }
+body {
+  font-family: var(--font-body);
+  background: var(--bg-deep);
+  color: var(--text-primary);
+  min-height: 100vh;
+  display: flex; align-items: center; justify-content: center;
+}
+.login-card {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 36px 32px;
+  width: 100%;
+  max-width: 380px;
+  margin: 20px;
+  text-align: center;
+}
+.login-logo {
+  width: 52px; height: 52px; border: 2px solid var(--accent-1);
+  border-radius: 8px; display: inline-flex; align-items: center; justify-content: center;
+  font-size: 28px; font-weight: 700; color: var(--accent-1);
+  margin-bottom: 16px;
+  animation: pulse 3s ease-in-out infinite;
+}
+@keyframes pulse {
+  0%,100%{box-shadow:0 0 8px var(--glow-1)}
+  50%{box-shadow:0 0 24px var(--glow-1)}
+}
+.login-title {
+  font-family: var(--font-display);
+  font-size: 18px; letter-spacing: 3px;
+  margin-bottom: 6px;
+}
+.login-title span { color: var(--text-muted); }
+.login-sub {
+  font-size: 12px; color: var(--text-dim);
+  letter-spacing: 1px; margin-bottom: 28px;
+}
+.login-input {
+  width: 100%;
+  background: var(--bg-deep);
+  border: 1px solid var(--border);
+  color: var(--text-primary);
+  font-family: var(--font-body);
+  font-size: 14px;
+  padding: 12px 14px;
+  border-radius: 6px;
+  outline: none;
+  text-align: center;
+  letter-spacing: 2px;
+  transition: border-color 0.2s;
+}
+.login-input:focus {
+  border-color: var(--accent-1);
+  box-shadow: 0 0 12px var(--glow-1);
+}
+.login-input::placeholder { color: var(--text-muted); letter-spacing: 1px; }
+.login-btn {
+  width: 100%;
+  background: transparent;
+  border: 1px solid var(--accent-1);
+  color: var(--accent-1);
+  font-family: var(--font-body);
+  font-size: 14px;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  padding: 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  margin-top: 14px;
+  transition: all 0.2s;
+}
+.login-btn:hover {
+  background: var(--glow-1);
+  box-shadow: 0 0 16px var(--glow-1);
+}
+.login-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.login-error {
+  color: var(--accent-err);
+  font-size: 12px;
+  margin-top: 12px;
+  letter-spacing: 1px;
+  min-height: 18px;
+}
+.login-footer {
+  margin-top: 24px;
+  font-size: 11px;
+  color: var(--text-muted);
+  letter-spacing: 1px;
+}
+</style>
+</head>
+<body>
+<div class="login-card">
+  <div class="login-logo">O</div>
+  <div class="login-title">OLLAMA <span>//</span> CONTROL CENTER</div>
+  <div class="login-sub">AUTHENTICATION REQUIRED</div>
+  <input type="password" class="login-input" id="password" placeholder="Password" autofocus
+    onkeydown="if(event.key==='Enter')doLogin()">
+  <button class="login-btn" id="loginBtn" onclick="doLogin()">Authenticate</button>
+  <div class="login-error" id="loginError">{% if error %}{{ error }}{% endif %}</div>
+  <div class="login-footer">SESSION EXPIRES AFTER 30 DAYS</div>
+</div>
+<script>
+async function doLogin() {
+  const btn = document.getElementById('loginBtn');
+  const pw = document.getElementById('password').value;
+  const err = document.getElementById('loginError');
+  if (!pw) { err.textContent = 'Enter password'; return; }
+  btn.disabled = true; btn.textContent = 'VERIFYING...'; err.textContent = '';
+  try {
+    const r = await fetch('/login', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({password: pw})
+    });
+    const d = await r.json();
+    if (d.ok) {
+      window.location.href = '/';
+    } else {
+      err.textContent = d.error || 'Authentication failed';
+      btn.disabled = false; btn.textContent = 'AUTHENTICATE';
+      document.getElementById('password').select();
+    }
+  } catch(e) {
+    err.textContent = 'Connection error';
+    btn.disabled = false; btn.textContent = 'AUTHENTICATE';
+  }
+}
+</script>
+</body>
+</html>

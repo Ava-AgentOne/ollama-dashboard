@@ -381,6 +381,25 @@ tr:hover td { background:var(--glow-1); }
 .btn-sm:hover { border-color:var(--accent-1); color:var(--accent-1); }
 .btn-sm.err:hover { border-color:var(--accent-err); color:var(--accent-err); }
 
+/* ── API docs ────────────────────────────────────────────────── */
+.api-section { margin-bottom:12px; }
+.api-endpoint {
+  display:flex; align-items:center; gap:10px; padding:8px 0;
+  border-bottom:1px solid rgba(0,0,0,0.04); font-size:13px; flex-wrap:wrap;
+}
+.api-method {
+  font-size:11px; font-weight:600; letter-spacing:1px; padding:2px 8px;
+  border-radius:3px; min-width:44px; text-align:center; text-transform:uppercase;
+}
+.api-method.get { background:var(--glow-1); color:var(--accent-1); }
+.api-method.post { background:rgba(240,160,48,0.15); color:var(--accent-2); }
+.api-path { color:var(--accent-3); font-weight:500; min-width:180px; }
+.api-desc { color:var(--text-dim); flex:1; }
+.api-desc code {
+  background:var(--bg-deep); border:1px solid var(--border); border-radius:3px;
+  padding:1px 5px; font-size:11px; color:var(--accent-3);
+}
+
 /* ── Chart toolbar ──────────────────────────────────────────── */
 .chart-toolbar {
   display:flex; align-items:center; justify-content:space-between;
@@ -541,6 +560,8 @@ tr:hover td { background:var(--glow-1); }
       <button class="nav-tab active" onclick="showPage('dashboard',this)">Dashboard</button>
       <button class="nav-tab" onclick="showPage('updates',this)">Updates</button>
       <button class="nav-tab" onclick="showPage('settings',this)">Settings</button>
+      <button class="nav-tab" onclick="showPage('api-docs',this)">API</button>
+      <button class="nav-tab" id="logoutBtn" onclick="window.location='/logout'" style="display:none;">Logout</button>
     </div>
     <div class="theme-controls">
       <select class="theme-select" id="themeSelect" onchange="setTheme(this.value)">
@@ -806,7 +827,7 @@ docker build --no-cache -t ollama-intel .
       </div>
       <div class="setting-row">
         <div class="setting-label">Dashboard version</div>
-        <span style="font-size:13px;color:var(--accent-3);">v0.9</span>
+        <span style="font-size:13px;color:var(--accent-3);">v1.0</span>
       </div>
     </div>
 
@@ -840,6 +861,115 @@ docker build --no-cache -t ollama-intel .
   <div style="margin-top:14px;display:flex;gap:8px;">
     <button class="btn" onclick="saveSettings()">Save Settings</button>
     <button class="btn c2" onclick="loadSettingsUI()">Reset</button>
+  </div>
+</div>
+
+<!-- ════════ PAGE: API DOCS ════════ -->
+<div class="page" id="page-api-docs">
+  <div class="settings-section" style="max-width:800px;">
+    <h3>API Documentation</h3>
+    <p style="font-size:13px;color:var(--text-dim);margin-bottom:16px;">
+      All endpoints return JSON. When password protection is enabled, requests require a valid session cookie.
+      The proxy on port 11434 forwards to Ollama and is <strong>not</strong> password-protected (clients like Open WebUI connect directly).
+    </p>
+
+    <div class="api-section">
+      <div class="api-endpoint">
+        <span class="api-method get">GET</span>
+        <span class="api-path">/api/status</span>
+        <span class="api-desc">Ollama connection status, running models, GPU memory, versions</span>
+      </div>
+      <div class="api-endpoint">
+        <span class="api-method get">GET</span>
+        <span class="api-path">/api/history</span>
+        <span class="api-desc">Full history — requests, benchmarks, and model events</span>
+      </div>
+      <div class="api-endpoint">
+        <span class="api-method get">GET</span>
+        <span class="api-path">/api/history/stats</span>
+        <span class="api-desc">Summary counts and history file size</span>
+      </div>
+      <div class="api-endpoint">
+        <span class="api-method get">GET</span>
+        <span class="api-path">/api/history/export</span>
+        <span class="api-desc">Download full history as JSON file</span>
+      </div>
+      <div class="api-endpoint">
+        <span class="api-method post">POST</span>
+        <span class="api-path">/api/benchmark</span>
+        <span class="api-desc">Run a benchmark on a model — body: <code>{"model": "name"}</code></span>
+      </div>
+      <div class="api-endpoint">
+        <span class="api-method post">POST</span>
+        <span class="api-path">/api/trim</span>
+        <span class="api-desc">Trim history — body: <code>{"mode": "count", "keep": 500}</code> or <code>{"mode": "time", "months": 6}</code></span>
+      </div>
+      <div class="api-endpoint">
+        <span class="api-method post">POST</span>
+        <span class="api-path">/api/clear</span>
+        <span class="api-desc">Delete all history data</span>
+      </div>
+      <div class="api-endpoint">
+        <span class="api-method get">GET</span>
+        <span class="api-path">/api/settings</span>
+        <span class="api-desc">Current dashboard settings</span>
+      </div>
+      <div class="api-endpoint">
+        <span class="api-method post">POST</span>
+        <span class="api-path">/api/settings</span>
+        <span class="api-desc">Save settings — body: <code>{"poll_interval": 5, "client_map": {...}}</code></span>
+      </div>
+      <div class="api-endpoint">
+        <span class="api-method get">GET</span>
+        <span class="api-path">/api/client-map</span>
+        <span class="api-desc">Active client IP-to-name mapping</span>
+      </div>
+      <div class="api-endpoint">
+        <span class="api-method get">GET</span>
+        <span class="api-path">/api/updates</span>
+        <span class="api-desc">Check for package and base image updates</span>
+      </div>
+    </div>
+
+    <h3 style="margin-top:20px;">Proxy Endpoints</h3>
+    <p style="font-size:13px;color:var(--text-dim);margin-bottom:16px;">
+      The proxy on port <strong>11434</strong> forwards all Ollama API requests and records token metrics.
+      Point your clients here instead of directly at Ollama for full tracking.
+    </p>
+    <div class="api-section">
+      <div class="api-endpoint">
+        <span class="api-method post">POST</span>
+        <span class="api-path">:11434/api/chat</span>
+        <span class="api-desc">Proxied chat completions (tokens tracked)</span>
+      </div>
+      <div class="api-endpoint">
+        <span class="api-method post">POST</span>
+        <span class="api-path">:11434/api/generate</span>
+        <span class="api-desc">Proxied text generation (tokens tracked)</span>
+      </div>
+      <div class="api-endpoint">
+        <span class="api-method">*</span>
+        <span class="api-path">:11434/*</span>
+        <span class="api-desc">All other Ollama endpoints pass through transparently</span>
+      </div>
+    </div>
+
+    <h3 style="margin-top:20px;">Authentication</h3>
+    <p style="font-size:13px;color:var(--text-dim);margin-bottom:16px;" id="authDocInfo">
+      Password protection is <strong>disabled</strong>. Set <code>DASHBOARD_PASSWORD</code> env var to enable.
+    </p>
+    <div class="api-section" id="authDocEndpoints" style="display:none;">
+      <div class="api-endpoint">
+        <span class="api-method post">POST</span>
+        <span class="api-path">/login</span>
+        <span class="api-desc">Authenticate — body: <code>{"password": "..."}</code> → sets session cookie</span>
+      </div>
+      <div class="api-endpoint">
+        <span class="api-method get">GET</span>
+        <span class="api-path">/logout</span>
+        <span class="api-desc">Clear session and redirect to login</span>
+      </div>
+    </div>
   </div>
 </div>
 </div>
@@ -1647,6 +1777,16 @@ async function loadSettingsUI() {
     document.getElementById('setSyncTheme').checked = settingsData.sync_theme || false;
 
     renderClientMapEditor(settingsData.client_map || {});
+
+    // Show/hide logout button based on auth
+    if (settingsData.auth_enabled) {
+      document.getElementById('logoutBtn').style.display = '';
+      document.getElementById('authDocInfo').innerHTML =
+        'Password protection is <strong>enabled</strong>. All dashboard and API requests require a valid session cookie.';
+      document.getElementById('authDocEndpoints').style.display = '';
+    } else {
+      document.getElementById('logoutBtn').style.display = 'none';
+    }
 
     // If sync theme is on, apply server-saved theme
     if (settingsData.sync_theme && settingsData.theme && settingsData.mode) {
