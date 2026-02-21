@@ -2,6 +2,32 @@
 
 All notable changes to ollama-dashboard will be documented in this file.
 
+## [v0.6] - 2026-02-21
+
+### Added
+- **Popup info card** — click any request row to see full details (endpoint, method, prompt speed, done reason, source)
+- **Sortable columns** — click table headers to sort by time, duration, model, tokens, tok/s, client
+- **Pagination** — request history loads 50 rows at a time with "Load more" button
+- **Client emoji mapping** — known IPs show friendly names (🌐 Open WebUI, 📊 Dashboard, 🖥️ Server, 🤖 default)
+- **Active Clients card** — shows unique client count with emoji names (replaced Installed Models card)
+- **Avg tok/s card** — real average from proxy data with peak speed in sub-text (replaced Token Speed card)
+- **Proxy status dot** — green/red indicator in header next to full proxy IP:port
+- **Escape key** closes popup overlay
+- **New app icon** — updated container icon
+
+### Changed
+- Header uptime now shows Ollama server uptime (removed dashboard uptime clock)
+- Proxy header shows full IP:port instead of just port number
+- Removed Endpoint column from request history table (available in popup)
+- Table now shows 7 columns: Time, Duration, Model, In, Out, tok/s, Client
+- Installed Models count moved to badge on Available Models panel header
+
+### Removed
+- Dashboard uptime counter (duplicate of Ollama uptime)
+- Endpoint column from main table (moved to popup details)
+- Token Speed card (replaced by Avg tok/s with real data)
+- Installed Models card (count in panel badge)
+
 ## [v0.5] - 2026-02-21
 
 ### Added
