@@ -2,6 +2,23 @@
 
 All notable changes to ollama-dashboard will be documented in this file.
 
+## [v2.3] - 2026-02-21
+
+### Changed
+- **Metrics source: API-first instead of log parsing** — all model info (name, family, parameter size, quantization, VRAM) now comes from Ollama `/api/ps` and `/api/version` endpoints
+- Request history "Tokens" column replaced with "Model" column (token counts no longer available in Ollama 0.9.x logs)
+- "Total Tokens" stat card renamed to "Bench Tokens" (only benchmark tokens are trackable via API)
+- Update checker rebuild commands updated for GHCR workflow
+
+### Added
+- Ollama version displayed in header (from `/api/version`)
+- Active model details: parameter size, quantization level, model family shown under Active Model card
+- Model details (size, VRAM, digest, family, quantization) fetched from `/api/ps` every poll cycle
+
+### Removed
+- Log-based token parsing (`eval_count`, `prompt_eval_count`) — removed because Ollama 0.9.x no longer outputs these in logs
+- Per-request token tracking from request history (not available without log stats)
+
 ## [v2.2] - 2026-02-21
 
 ### Changed

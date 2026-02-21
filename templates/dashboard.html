@@ -228,7 +228,7 @@ tr:hover td { background:var(--glow-1); }
 .td-err { color:var(--accent-err); font-weight:600; }
 .td-dur { color:var(--accent-2); }
 .td-dim { color:var(--text-muted); font-size:13px; }
-.td-tok { color:var(--accent-4); font-weight:500; }
+.td-model { color:var(--accent-4); font-weight:500; font-size:12px; }
 
 /* ── Status pips ─────────────────────────────────────────────── */
 .pip { width:6px; height:6px; border-radius:50%; display:inline-block; margin-right:4px; }
@@ -374,6 +374,11 @@ tr:hover td { background:var(--glow-1); }
         <span id="connLabel">CONNECTING</span>
       </div>
       <div class="header-divider"></div>
+      <div style="font-size:12px;color:var(--text-dim);">
+        <span style="color:var(--text-muted);letter-spacing:1px;">OLLAMA</span>
+        <span id="ollamaVer">—</span>
+      </div>
+      <div class="header-divider"></div>
       <div class="header-uptime">
         <span class="header-uptime-label">UPTIME</span>
         <span id="uptime">00:00:00</span>
@@ -416,9 +421,9 @@ tr:hover td { background:var(--glow-1); }
       <div class="stat-sub" id="modelsSize">0 GB total</div>
     </div>
     <div class="stat-card c2">
-      <div class="stat-label">Total Tokens</div>
+      <div class="stat-label">Bench Tokens</div>
       <div class="stat-value c2" id="totalTokens">0</div>
-      <div class="stat-sub" id="totalTokensSub">Generated</div>
+      <div class="stat-sub" id="totalTokensSub">From benchmarks</div>
     </div>
   </div>
 
@@ -475,7 +480,7 @@ tr:hover td { background:var(--glow-1); }
       </div>
       <div class="panel-body" style="padding:0;">
         <div class="scroll-box">
-          <table><thead><tr><th>Time</th><th>Endpoint</th><th>Status</th><th>Duration</th><th>Tokens</th><th>Client</th></tr></thead>
+          <table><thead><tr><th>Time</th><th>Endpoint</th><th>Status</th><th>Duration</th><th>Model</th><th>Client</th></tr></thead>
           <tbody id="histBody"><tr><td colspan="6" class="empty">No requests logged yet</td></tr></tbody></table>
         </div>
       </div>
@@ -664,12 +669,21 @@ async function fetchStatus() {
     if(d.status==='online'){ dot.className='conn-dot'; lbl.textContent='ONLINE'; }
     else { dot.className='conn-dot offline'; lbl.textContent='OFFLINE'; }
 
+    // Ollama version from API
+    document.getElementById('ollamaVer').textContent=d.ollama_version||'—';
+
     const running = d.running?.models||[];
+    const details = d.model_details||[];
     const el=document.getElementById('activeModel'), sub=document.getElementById('activeModelSub');
     if(running.length>0) {
       const m=running[0]; el.textContent=m.name||'—';
+      const det=details.length>0?details[0]:{};
+      const parts=[];
+      if(det.parameter_size) parts.push(det.parameter_size);
+      if(det.quantization) parts.push(det.quantization);
+      if(det.family) parts.push(det.family);
       const vram=m.size_vram||m.size||0;
-      sub.textContent='VRAM: '+fmtBytes(vram);
+      sub.textContent=parts.length>0 ? parts.join(' · ')+' · VRAM: '+fmtBytes(vram) : 'VRAM: '+fmtBytes(vram);
       document.getElementById('gpuMem').textContent=fmtBytes(vram);
       document.getElementById('gpuMemSub').textContent=running.length+' model(s) loaded';
     } else {
@@ -715,7 +729,7 @@ async function fetchHistory() {
     const sd=await sr.json();
     document.getElementById('histFileInfo').textContent=
       `Reqs: ${sd.requests} | Bench: ${sd.benchmarks} | Events: ${sd.events} | File: ${sd.file_size}`;
-    // Update total tokens stat card
+    // Update bench tokens stat card
     document.getElementById('totalTokens').textContent=fmtNum(sd.total_tokens||0);
     document.getElementById('totalTokensSub').textContent=
       `${fmtNum(sd.total_gen_tokens||0)} gen + ${fmtNum(sd.total_prompt_tokens||0)} prompt`;
@@ -732,13 +746,13 @@ function renderHistory() {
   if(!reqs.length){ hb.innerHTML='<tr><td colspan="6" class="empty">No requests in this period</td></tr>'; }
   else {
     hb.innerHTML=reqs.slice(0,300).map(r=>{
-      const tokDisplay = (r.total_tokens && r.total_tokens > 0) ? r.total_tokens : '—';
+      const modelDisplay = r.model || '—';
       return `<tr>
         <td class="td-dim">${fmtTime(r.time)}</td>
         <td class="td-name">${r.path||'—'}</td>
         <td class="${r.status===200?'td-ok':'td-err'}">${r.status||'—'}</td>
         <td class="td-dur">${r.duration||'—'}</td>
-        <td class="td-tok">${tokDisplay}</td>
+        <td class="td-model">${modelDisplay}</td>
         <td class="td-dim">${r.client_ip||'—'}</td>
       </tr>`;
     }).join('');
