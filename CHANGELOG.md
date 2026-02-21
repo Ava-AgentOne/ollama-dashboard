@@ -2,6 +2,22 @@
 
 All notable changes to ollama-dashboard will be documented in this file.
 
+## [v2.5] - 2026-02-21
+
+### Added
+- **In/Out token columns** in Request History (prompt tokens + generated tokens per request)
+- **tok/s column** in Request History showing generation speed per request
+- **Generation Speed chart** — canvas line chart showing tok/s over time with average line
+- **Filtered token totals** — Total Tokens card now updates based on time period filter (in + out)
+
+### Changed
+- Active Model sub-text no longer shows VRAM (already shown in GPU Memory card)
+- Duration display uses whole seconds when ≥1s (no decimals)
+- Total Tokens card shows "X in + Y out" breakdown
+
+### Removed
+- Removed redundant VRAM display from Active Model subtitle
+
 ## [v2.4] - 2026-02-21
 
 ### Added
