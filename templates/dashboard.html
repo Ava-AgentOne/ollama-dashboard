@@ -653,11 +653,16 @@ let currentPageCount = 50;
 let ollamaStartTime = null;
 
 // ── Client Name Mapping ─────────────────────────────────────
-const CLIENT_MAP = {
-  '10.0.1.211': { name:'Open WebUI', icon:'🌐' },
-  '10.0.1.210': { name:'Dashboard',  icon:'📊' },
-  '10.0.1.99':  { name:'Server',     icon:'🖥️' },
-};
+// Auto-populated from server config, or add your own mappings
+let CLIENT_MAP = {};
+// Fetch client map from server
+async function loadClientMap() {
+  try {
+    const r = await fetch(`${API}/api/client-map`);
+    if (r.ok) CLIENT_MAP = await r.json();
+  } catch(e) {}
+}
+loadClientMap();
 function getClient(ip) {
   if (!ip) return { name:'Unknown', icon:'❓', ip:'' };
   const mapped = CLIENT_MAP[ip];
