@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Ollama Intel iGPU Monitoring Dashboard v2.5 — Backend + API Proxy"""
+"""Ollama Intel iGPU Monitoring Dashboard v0.5 — Backend + API Proxy"""
 
 from flask import Flask, jsonify, render_template, request as flask_request, Response
 import requests
@@ -702,7 +702,7 @@ if __name__ == '__main__':
     threading.Thread(target=run_proxy, daemon=True).start()
 
     # Start dashboard on port 8088
-    print(f"[DASHBOARD] Ollama Monitor v2.5 starting on port 8088")
+    print(f"[DASHBOARD] Ollama Monitor v0.5 starting on port 8088")
     print(f"[DASHBOARD] Monitoring: {OLLAMA_URL}")
     print(f"[DASHBOARD] Container: {OLLAMA_CONTAINER}")
     print(f"[DASHBOARD] History: {HISTORY_FILE}")
