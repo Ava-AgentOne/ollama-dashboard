@@ -2,7 +2,14 @@
 <html lang="en" data-theme="terminal" data-mode="dark">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#060a0e">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Ollama">
+<link rel="manifest" href="/manifest.json">
+<link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
+<link rel="icon" type="image/png" sizes="192x192" href="/static/icon-192.png">
 <title>OLLAMA // CONTROL CENTER</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&family=Share+Tech+Mono&family=Orbitron:wght@400;600;700;900&family=Exo+2:wght@300;400;500;600;700&display=swap" rel="stylesheet">
@@ -435,11 +442,102 @@ tr:hover td { background:var(--glow-1); }
 .empty { text-align:center; padding:24px; font-size:14px; color:var(--text-muted); letter-spacing:1px; }
 
 /* ── Responsive ──────────────────────────────────────────────── */
+/* ── Collapsible panels ───────────────────────────────────────── */
+.panel-header.collapsible { cursor:pointer; user-select:none; }
+.panel-header.collapsible::after {
+  content:'▼'; font-size:10px; color:var(--text-muted); transition:transform 0.2s; margin-left:8px;
+}
+.panel-header.collapsible.collapsed::after { transform:rotate(-90deg); }
+.panel-body.collapsed, .filter-bar.collapsed { display:none; }
+
+/* ── Responsive: Tablet (<=900px) ────────────────────────────── */
 @media(max-width:900px) {
-  .grid-2{grid-template-columns:1fr}
-  .settings-grid{grid-template-columns:1fr}
-  .stats-row{grid-template-columns:repeat(2,1fr)}
-  .header{flex-direction:column;gap:8px}
+  .grid-2 { grid-template-columns:1fr; }
+  .settings-grid { grid-template-columns:1fr; }
+  .stats-row { grid-template-columns:repeat(2,1fr); }
+  .header { flex-direction:column; gap:8px; }
+  .header-status-group { flex-wrap:wrap; justify-content:center; }
+  .controls-bar { flex-direction:column; align-items:flex-start; }
+}
+
+/* ── Responsive: Mobile (<=600px) ────────────────────────────── */
+@media(max-width:600px) {
+  body { font-size:13px; }
+  .header { padding:10px 12px; }
+  .header-title { font-size:16px; letter-spacing:2px; }
+  .logo-mark { width:28px; height:28px; font-size:15px; }
+  .main { padding:10px 12px; }
+
+  /* Stats: 2-column compact */
+  .stats-row { grid-template-columns:repeat(2,1fr); gap:8px; }
+  .stat-card { padding:10px 12px; }
+  .stat-value { font-size:22px; }
+  .stat-label { font-size:12px; letter-spacing:1.5px; }
+  .stat-sub { font-size:11px; }
+
+  /* Panels */
+  .panel-header { padding:8px 12px; }
+  .panel-body { padding:10px; }
+
+  /* Nav tabs compact */
+  .nav-tabs { gap:2px; }
+  .nav-tab { padding:4px 8px; font-size:12px; }
+
+  /* Theme controls stack */
+  .theme-controls { gap:6px; }
+  .theme-select { font-size:12px; padding:4px 6px; }
+
+  /* Header status: hide dividers, compact */
+  .header-divider { display:none; }
+  .header-status-group { gap:8px; font-size:11px; }
+  .header-right { gap:8px; }
+
+  /* Chart toolbar wrap */
+  .chart-toolbar { padding:6px 10px; }
+  .chart-toggles { gap:3px; }
+  .chart-toggle { font-size:11px; padding:3px 7px; }
+
+  /* Table: compact */
+  th { font-size:11px; padding:5px 6px; letter-spacing:1px; }
+  td { font-size:12px; padding:6px; }
+  .td-model { font-size:11px; }
+
+  /* Hide less important columns on mobile */
+  .hide-mobile { display:none; }
+
+  /* Popup: full width on mobile */
+  .popup-card { min-width:auto; max-width:calc(100vw - 32px); margin:16px; padding:16px; }
+  .popup-grid { grid-template-columns:1fr; gap:8px; }
+  .popup-title { font-size:13px; }
+
+  /* Filter bar compact */
+  .filter-bar { padding:6px 10px; }
+  .filter-btn { font-size:12px; padding:3px 7px; }
+
+  /* Controls bar stack */
+  .controls-bar { padding:10px 12px; }
+  .controls-info { font-size:12px; }
+  .controls-group { flex-wrap:wrap; gap:6px; }
+
+  /* Settings compact */
+  .setting-row { flex-direction:column; align-items:flex-start; gap:6px; }
+  .client-map-row { flex-wrap:wrap; }
+  .client-map-row .input.ip { max-width:100%; }
+  .client-map-row .input.name { max-width:100%; }
+
+  /* Bench grid compact */
+  .bench-grid { grid-template-columns:repeat(2,1fr); gap:6px; }
+  .bench-m { padding:8px; }
+  .bench-m-value { font-size:18px; }
+  .bench-m-label { font-size:12px; }
+}
+
+/* ── Responsive: Small mobile (<=400px) ──────────────────────── */
+@media(max-width:400px) {
+  .stats-row { grid-template-columns:1fr 1fr; gap:6px; }
+  .stat-value { font-size:18px; }
+  .header-title { font-size:14px; }
+  .popup-grid { grid-template-columns:1fr; }
 }
 </style>
 </head>
@@ -540,7 +638,7 @@ tr:hover td { background:var(--glow-1); }
       </div>
       <div class="panel-body" style="padding:0;">
         <div class="scroll-box" style="max-height:300px;">
-          <table><thead><tr><th>Model</th><th>Size</th><th>Quant</th><th>Status</th></tr></thead>
+          <table><thead><tr><th>Model</th><th>Size</th><th class="hide-mobile">Quant</th><th>Status</th></tr></thead>
           <tbody id="modelsBody"><tr><td colspan="4" class="empty">Loading...</td></tr></tbody></table>
         </div>
       </div>
@@ -587,7 +685,7 @@ tr:hover td { background:var(--glow-1); }
           <table id="histTable">
             <thead><tr>
               <th class="sortable" data-col="time" onclick="sortBy('time',this)">Time</th>
-              <th class="sortable" data-col="duration_ms" onclick="sortBy('duration_ms',this)">Duration</th>
+              <th class="sortable hide-mobile" data-col="duration_ms" onclick="sortBy('duration_ms',this)">Duration</th>
               <th class="sortable" data-col="model" onclick="sortBy('model',this)">Model</th>
               <th class="sortable" data-col="prompt_tokens" onclick="sortBy('prompt_tokens',this)">In</th>
               <th class="sortable" data-col="tokens" onclick="sortBy('tokens',this)">Out</th>
@@ -721,7 +819,7 @@ docker build --no-cache -t ollama-intel .
       </div>
       <div class="setting-row">
         <div class="setting-label">Dashboard version</div>
-        <span style="font-size:13px;color:var(--accent-3);">v0.8</span>
+        <span style="font-size:13px;color:var(--accent-3);">v0.9</span>
       </div>
     </div>
   </div>
@@ -1027,7 +1125,7 @@ async function fetchStatus() {
       tb.innerHTML=models.map(m=>{
         const a=runNames.has(m.name);
         return `<tr><td class="td-name">${m.name}</td><td class="td-dim">${fmtBytes(m.size)}</td>
-        <td class="td-dim">${m.details?.quantization_level||'—'}</td>
+        <td class="td-dim hide-mobile">${m.details?.quantization_level||'—'}</td>
         <td><span class="pip ${a?'on':'off'}"></span><span style="font-size:13px;letter-spacing:1px;color:${a?'var(--accent-1)':'var(--text-muted)'}">${a?'LOADED':'IDLE'}</span></td></tr>`;
       }).join('');
     }
@@ -1387,7 +1485,7 @@ function renderHistory() {
       const tps = (r.tokens_per_sec && r.tokens_per_sec > 0) ? r.tokens_per_sec.toFixed(1) : '—';
       return `<tr class="clickable-row" onclick="showPopup(${i})">
         <td class="td-dim">${fmtTime(r.time)}</td>
-        <td class="td-dur">${r.duration||'—'}</td>
+        <td class="td-dur hide-mobile">${r.duration||'—'}</td>
         <td class="td-model">${r.model||'—'}</td>
         <td class="td-tok">${inTok}</td>
         <td class="td-tok">${outTok}</td>
@@ -1690,6 +1788,37 @@ async function startPolling() {
   setInterval(poll, Math.max(interval, 2000));
 }
 startPolling();
+
+// ── Collapsible Panels ──────────────────────────────────────
+function initCollapsible() {
+  document.querySelectorAll('.panel-header').forEach(header => {
+    // Only panels on the dashboard page, skip charts and settings
+    const panel = header.closest('.panel');
+    if (!panel) return;
+    const body = panel.querySelector('.panel-body');
+    const filterBar = panel.querySelector('.filter-bar');
+    if (!body) return;
+
+    header.classList.add('collapsible');
+    header.addEventListener('click', (e) => {
+      // Don't collapse when clicking sort headers or buttons inside
+      if (e.target.closest('th, button, select, .chart-toggle')) return;
+      header.classList.toggle('collapsed');
+      body.classList.toggle('collapsed');
+      if (filterBar) filterBar.classList.toggle('collapsed');
+    });
+  });
+}
+initCollapsible();
+
+// ── Service Worker Registration ─────────────────────────────
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('/sw.js').then(reg => {
+    console.log('[SW] Registered, scope:', reg.scope);
+  }).catch(err => {
+    console.log('[SW] Registration failed:', err);
+  });
+}
 </script>
 </body>
 </html>
