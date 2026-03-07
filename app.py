@@ -375,7 +375,16 @@ def proxy_forward(target_url, path):
                     lines = accumulated.decode('utf-8', errors='replace').strip().split('\n')
                     for line in reversed(lines):
                         try:
-                            data = json.loads(line)
+                            raw_line = line.strip()
+                            if not raw_line:
+                                continue
+                            # SSE streams use "data: {json}" lines and can include control frames.
+                            if raw_line.startswith('data:'):
+                                raw_line = raw_line[5:].strip()
+                            if not raw_line or raw_line == '[DONE]':
+                                continue
+
+                            data = json.loads(raw_line)
                             eval_tokens, prompt_tokens, eval_dur, prompt_dur, done_reason = parse_token_stats(data, path)
                             if eval_dur > 0:
                                 tok_per_sec = round(eval_tokens / max(eval_dur / 1e9, 0.001), 2)
