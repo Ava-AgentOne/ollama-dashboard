@@ -417,6 +417,13 @@ def proxy_forward(target_url, path):
                 except:
                     pass
 
+                # Fallback for APIs that return token usage but no eval_duration fields.
+                elapsed_s = max(time.time() - start_ts, 0.001)
+                if tok_per_sec <= 0 and eval_tokens > 0:
+                    tok_per_sec = round(eval_tokens / elapsed_s, 2)
+                if prompt_tok_per_sec <= 0 and prompt_tokens > 0:
+                    prompt_tok_per_sec = round(prompt_tokens / elapsed_s, 2)
+
                 entry = build_proxy_entry(
                     status_code=ollama_resp.status_code,
                     model_name=model_name,
@@ -452,6 +459,13 @@ def proxy_forward(target_url, path):
                     prompt_tok_per_sec = round(prompt_tokens / max(prompt_dur / 1e9, 0.001), 2)
             except:
                 pass
+
+            # Fallback for APIs that return usage without explicit duration fields.
+            elapsed_s = max(time.time() - start_ts, 0.001)
+            if tok_per_sec <= 0 and eval_tokens > 0:
+                tok_per_sec = round(eval_tokens / elapsed_s, 2)
+            if prompt_tok_per_sec <= 0 and prompt_tokens > 0:
+                prompt_tok_per_sec = round(prompt_tokens / elapsed_s, 2)
 
             entry = build_proxy_entry(
                 status_code=ollama_resp.status_code,
