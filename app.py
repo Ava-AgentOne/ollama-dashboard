@@ -314,14 +314,37 @@ def proxy_forward(target_url, path):
     body_json = None
     is_streaming = True
 
-    if body and is_trackable:
+    if body:
         try:
             body_json = json.loads(body)
             is_streaming = body_json.get('stream', True)
         except:
             pass
 
-    req_path = f"/{path}"
+    req_path = flask_request.full_path.rstrip('?')
+
+    def build_proxy_entry(status_code, model_name='—', tokens=0, prompt_tokens=0,
+                          tokens_per_sec=0, prompt_tok_per_sec=0, done_reason=''):
+        elapsed_ms = (time.time() - start_ts) * 1000
+        now = datetime.now()
+        return {
+            "time": now.isoformat(),
+            "time_display": now.strftime("%Y/%m/%d - %H:%M:%S"),
+            "status": status_code,
+            "duration": _fmt_duration(elapsed_ms),
+            "duration_ms": round(elapsed_ms, 1),
+            "client_ip": client_ip,
+            "method": method,
+            "path": req_path,
+            "model": model_name,
+            "tokens": tokens,
+            "prompt_tokens": prompt_tokens,
+            "total_tokens": tokens + prompt_tokens,
+            "tokens_per_sec": tokens_per_sec,
+            "prompt_tok_per_sec": prompt_tok_per_sec,
+            "done_reason": done_reason,
+            "source": "proxy",
+        }
 
     try:
         ollama_resp = requests.request(
@@ -342,7 +365,6 @@ def proxy_forward(target_url, path):
                         accumulated += chunk
 
                 model_name = body_json.get('model', '—') if body_json else '—'
-                elapsed_ms = (time.time() - start_ts) * 1000
                 eval_tokens = 0
                 prompt_tokens = 0
                 tok_per_sec = 0
@@ -367,24 +389,15 @@ def proxy_forward(target_url, path):
                 except:
                     pass
 
-                entry = {
-                    "time": datetime.now().isoformat(),
-                    "time_display": datetime.now().strftime("%Y/%m/%d - %H:%M:%S"),
-                    "status": ollama_resp.status_code,
-                    "duration": _fmt_duration(elapsed_ms),
-                    "duration_ms": round(elapsed_ms, 1),
-                    "client_ip": client_ip,
-                    "method": method,
-                    "path": req_path,
-                    "model": model_name,
-                    "tokens": eval_tokens,
-                    "prompt_tokens": prompt_tokens,
-                    "total_tokens": eval_tokens + prompt_tokens,
-                    "tokens_per_sec": tok_per_sec,
-                    "prompt_tok_per_sec": prompt_tok_per_sec,
-                    "done_reason": done_reason,
-                    "source": "proxy",
-                }
+                entry = build_proxy_entry(
+                    status_code=ollama_resp.status_code,
+                    model_name=model_name,
+                    tokens=eval_tokens,
+                    prompt_tokens=prompt_tokens,
+                    tokens_per_sec=tok_per_sec,
+                    prompt_tok_per_sec=prompt_tok_per_sec,
+                    done_reason=done_reason
+                )
                 log_request(entry)
 
             ct = ollama_resp.headers.get('Content-Type', 'application/x-ndjson')
@@ -393,7 +406,6 @@ def proxy_forward(target_url, path):
 
         elif is_trackable and not is_streaming:
             resp_data = ollama_resp.content
-            elapsed_ms = (time.time() - start_ts) * 1000
 
             model_name = body_json.get('model', '—') if body_json else '—'
             eval_tokens = 0
@@ -413,30 +425,27 @@ def proxy_forward(target_url, path):
             except:
                 pass
 
-            entry = {
-                "time": datetime.now().isoformat(),
-                "time_display": datetime.now().strftime("%Y/%m/%d - %H:%M:%S"),
-                "status": ollama_resp.status_code,
-                "duration": _fmt_duration(elapsed_ms),
-                "duration_ms": round(elapsed_ms, 1),
-                "client_ip": client_ip,
-                "method": method,
-                "path": req_path,
-                "model": model_name,
-                "tokens": eval_tokens,
-                "prompt_tokens": prompt_tokens,
-                "total_tokens": eval_tokens + prompt_tokens,
-                "tokens_per_sec": tok_per_sec,
-                "prompt_tok_per_sec": prompt_tok_per_sec,
-                "done_reason": done_reason,
-                "source": "proxy",
-            }
+            entry = build_proxy_entry(
+                status_code=ollama_resp.status_code,
+                model_name=model_name,
+                tokens=eval_tokens,
+                prompt_tokens=prompt_tokens,
+                tokens_per_sec=tok_per_sec,
+                prompt_tok_per_sec=prompt_tok_per_sec,
+                done_reason=done_reason
+            )
             log_request(entry)
 
             ct = ollama_resp.headers.get('Content-Type', 'application/json')
             return Response(resp_data, status=ollama_resp.status_code, content_type=ct)
 
         else:
+            model_name = body_json.get('model', '—') if isinstance(body_json, dict) else '—'
+            log_request(build_proxy_entry(
+                status_code=ollama_resp.status_code,
+                model_name=model_name
+            ))
+
             def passthrough():
                 for chunk in ollama_resp.iter_content(chunk_size=None):
                     if chunk:
@@ -447,17 +456,21 @@ def proxy_forward(target_url, path):
                            content_type=ct, direct_passthrough=True)
 
     except requests.exceptions.ConnectionError:
+        log_request(build_proxy_entry(status_code=502, done_reason="ConnectionError"))
         return jsonify({"error": "Cannot connect to Ollama"}), 502
     except requests.exceptions.Timeout:
+        log_request(build_proxy_entry(status_code=504, done_reason="Timeout"))
         return jsonify({"error": "Ollama request timed out"}), 504
     except Exception as e:
+        log_request(build_proxy_entry(status_code=500, done_reason=f"ProxyError: {str(e)}"))
         return jsonify({"error": str(e)}), 500
 
 
-@proxy_app.route('/<path:path>', methods=['GET', 'POST', 'PUT', 'DELETE', 'PATCH'])
+@proxy_app.route('/', defaults={'path': ''}, methods=['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD', 'OPTIONS'])
+@proxy_app.route('/<path:path>', methods=['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD', 'OPTIONS'])
 def proxy_handler(path):
     """Transparent proxy: forward to Ollama, capture token stats from responses."""
-    target_url = f"{OLLAMA_URL}/{path}"
+    target_url = f"{OLLAMA_URL}/{path}" if path else OLLAMA_URL
     return proxy_forward(target_url, path)
 
 
