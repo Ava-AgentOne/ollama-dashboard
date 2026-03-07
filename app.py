@@ -260,31 +260,59 @@ def _fmt_duration(ms):
     s = int(round(s % 60))
     return f"{m}m{s}s"
 
+def parse_token_stats(data, path):
+    """Parse token stats from response data, handling both Ollama and OpenAI formats.
+
+    Ollama native: eval_count, prompt_eval_count, eval_duration, prompt_eval_duration
+    OpenAI compat: usage.completion_tokens, usage.prompt_tokens (no duration info)
+    """
+    eval_tokens = 0
+    prompt_tokens = 0
+    eval_dur = 0
+    prompt_dur = 0
+    done_reason = ""
+
+    # Check if this is a streaming done response (Ollama format)
+    if data.get('done'):
+        eval_tokens = data.get('eval_count', 0)
+        prompt_tokens = data.get('prompt_eval_count', 0)
+        eval_dur = data.get('eval_duration', 0)
+        prompt_dur = data.get('prompt_eval_duration', 0)
+        done_reason = data.get('done_reason', '')
+    # Check for OpenAI-compatible usage block
+    elif 'usage' in data:
+        usage = data.get('usage', {})
+        eval_tokens = usage.get('completion_tokens', usage.get('output_tokens', 0))
+        prompt_tokens = usage.get('prompt_tokens', usage.get('input_tokens', 0))
+        done_reason = data.get('finish_reason', '')
+    # Fallback: direct field lookup
+    else:
+        eval_tokens = data.get('eval_count', data.get('output_tokens', 0))
+        prompt_tokens = data.get('prompt_eval_count', data.get('input_tokens', 0))
+        done_reason = data.get('done_reason', data.get('finish_reason', ''))
+
+    return eval_tokens, prompt_tokens, eval_dur, prompt_dur, done_reason
+
+
 # ══════════════════════════════════════════════════════════════════
 #  OLLAMA API PROXY — runs on port 11434
 #  Forwards all requests to Ollama, captures token stats
 # ══════════════════════════════════════════════════════════════════
 
-@proxy_app.route('/', defaults={'path': ''}, methods=['GET', 'POST', 'PUT', 'DELETE', 'PATCH'])
-@proxy_app.route('/<path:path>', methods=['GET', 'POST', 'PUT', 'DELETE', 'PATCH'])
-def proxy_handler(path):
-    """Transparent proxy: forward to Ollama, capture token stats from responses."""
-    target_url = f"{OLLAMA_URL}/{path}"
+def proxy_forward(target_url, path):
+    """Forward request to Ollama (common code for proxy handler)."""
     client_ip = flask_request.remote_addr or "unknown"
     method = flask_request.method
     start_ts = time.time()
 
-    # Forward headers (skip hop-by-hop)
     skip_headers = {'host', 'transfer-encoding', 'connection'}
     fwd_headers = {k: v for k, v in flask_request.headers if k.lower() not in skip_headers}
 
-    # Determine if this is a chat/generate request we should track
-    is_trackable = path in ('api/chat', 'api/generate')
+    is_trackable = path in ('api/chat', 'api/generate') or path.startswith('v1/')
 
-    # Get request body
     body = flask_request.get_data()
     body_json = None
-    is_streaming = True  # Ollama defaults to streaming
+    is_streaming = True
 
     if body and is_trackable:
         try:
@@ -293,11 +321,9 @@ def proxy_handler(path):
         except:
             pass
 
-    # Capture path now (request context won't be available inside generators)
     req_path = f"/{path}"
 
     try:
-        # Forward the request to Ollama
         ollama_resp = requests.request(
             method=method,
             url=target_url,
@@ -308,7 +334,6 @@ def proxy_handler(path):
         )
 
         if is_trackable and is_streaming:
-            # ── Streaming: raw byte passthrough, parse stats after ──
             def stream_and_capture():
                 accumulated = b''
                 for chunk in ollama_resp.iter_content(chunk_size=None):
@@ -316,7 +341,6 @@ def proxy_handler(path):
                         yield chunk
                         accumulated += chunk
 
-                # Parse accumulated NDJSON for final stats
                 model_name = body_json.get('model', '—') if body_json else '—'
                 elapsed_ms = (time.time() - start_ts) * 1000
                 eval_tokens = 0
@@ -330,17 +354,13 @@ def proxy_handler(path):
                     for line in reversed(lines):
                         try:
                             data = json.loads(line)
+                            eval_tokens, prompt_tokens, eval_dur, prompt_dur, done_reason = parse_token_stats(data, path)
+                            if eval_dur > 0:
+                                tok_per_sec = round(eval_tokens / max(eval_dur / 1e9, 0.001), 2)
+                            if prompt_dur > 0:
+                                prompt_tok_per_sec = round(prompt_tokens / max(prompt_dur / 1e9, 0.001), 2)
+                            model_name = data.get('model', model_name)
                             if data.get('done'):
-                                eval_tokens = data.get('eval_count', 0)
-                                prompt_tokens = data.get('prompt_eval_count', 0)
-                                eval_dur = data.get('eval_duration', 0)
-                                prompt_dur = data.get('prompt_eval_duration', 0)
-                                done_reason = data.get('done_reason', '')
-                                if eval_dur > 0:
-                                    tok_per_sec = round(eval_tokens / max(eval_dur / 1e9, 0.001), 2)
-                                if prompt_dur > 0:
-                                    prompt_tok_per_sec = round(prompt_tokens / max(prompt_dur / 1e9, 0.001), 2)
-                                model_name = data.get('model', model_name)
                                 break
                         except:
                             continue
@@ -367,13 +387,11 @@ def proxy_handler(path):
                 }
                 log_request(entry)
 
-            # Mirror Ollama's content type exactly
             ct = ollama_resp.headers.get('Content-Type', 'application/x-ndjson')
             return Response(stream_and_capture(), status=ollama_resp.status_code,
                            content_type=ct, direct_passthrough=True)
 
         elif is_trackable and not is_streaming:
-            # ── Non-streaming: read full response, capture stats ──
             resp_data = ollama_resp.content
             elapsed_ms = (time.time() - start_ts) * 1000
 
@@ -387,11 +405,7 @@ def proxy_handler(path):
             try:
                 data = json.loads(resp_data)
                 model_name = data.get('model', model_name)
-                eval_tokens = data.get('eval_count', 0)
-                prompt_tokens = data.get('prompt_eval_count', 0)
-                eval_dur = data.get('eval_duration', 0)
-                prompt_dur = data.get('prompt_eval_duration', 0)
-                done_reason = data.get('done_reason', '')
+                eval_tokens, prompt_tokens, eval_dur, prompt_dur, done_reason = parse_token_stats(data, path)
                 if eval_dur > 0:
                     tok_per_sec = round(eval_tokens / max(eval_dur / 1e9, 0.001), 2)
                 if prompt_dur > 0:
@@ -419,12 +433,10 @@ def proxy_handler(path):
             }
             log_request(entry)
 
-            # Return exact response from Ollama
             ct = ollama_resp.headers.get('Content-Type', 'application/json')
             return Response(resp_data, status=ollama_resp.status_code, content_type=ct)
 
         else:
-            # ── Non-trackable: pure passthrough ──
             def passthrough():
                 for chunk in ollama_resp.iter_content(chunk_size=None):
                     if chunk:
@@ -440,6 +452,13 @@ def proxy_handler(path):
         return jsonify({"error": "Ollama request timed out"}), 504
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+@proxy_app.route('/<path:path>', methods=['GET', 'POST', 'PUT', 'DELETE', 'PATCH'])
+def proxy_handler(path):
+    """Transparent proxy: forward to Ollama, capture token stats from responses."""
+    target_url = f"{OLLAMA_URL}/{path}"
+    return proxy_forward(target_url, path)
 
 
 # ── Background poller ────────────────────────────────────────────
@@ -831,9 +850,12 @@ if __name__ == '__main__':
 
     # Start proxy on port 11434 in background thread
     def run_proxy():
-        print(f"[PROXY] Ollama API Proxy starting on port {PROXY_PORT}")
-        print(f"[PROXY] Forwarding to: {OLLAMA_URL}")
-        proxy_app.run(host='0.0.0.0', port=PROXY_PORT, debug=False, threaded=True)
+        print(f"[PROXY] Ollama API Proxy starting on port {PROXY_PORT}", flush=True)
+        print(f"[PROXY] Forwarding to: {OLLAMA_URL}", flush=True)
+        try:
+            proxy_app.run(host='0.0.0.0', port=PROXY_PORT, debug=False, threaded=True)
+        except Exception as e:
+            print(f"[PROXY ERROR] {e}", flush=True)
 
     threading.Thread(target=run_proxy, daemon=True).start()
 
