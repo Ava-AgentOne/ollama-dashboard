@@ -285,6 +285,18 @@ def parse_token_stats(data, path):
         eval_tokens = usage.get('completion_tokens', usage.get('output_tokens', 0))
         prompt_tokens = usage.get('prompt_tokens', usage.get('input_tokens', 0))
         done_reason = data.get('finish_reason', '')
+    # Anthropic-style message_start can nest usage under message.usage
+    elif isinstance(data.get('message'), dict) and isinstance(data['message'].get('usage'), dict):
+        usage = data['message']['usage']
+        eval_tokens = usage.get('output_tokens', usage.get('completion_tokens', 0))
+        prompt_tokens = usage.get('input_tokens', usage.get('prompt_tokens', 0))
+        done_reason = data.get('stop_reason', data.get('type', ''))
+    # Anthropic-style message_delta can include usage at top level
+    elif data.get('type') == 'message_delta' and isinstance(data.get('usage'), dict):
+        usage = data.get('usage', {})
+        eval_tokens = usage.get('output_tokens', usage.get('completion_tokens', 0))
+        prompt_tokens = usage.get('input_tokens', usage.get('prompt_tokens', 0))
+        done_reason = data.get('delta', {}).get('stop_reason', '')
     # Fallback: direct field lookup
     else:
         eval_tokens = data.get('eval_count', data.get('output_tokens', 0))
@@ -385,11 +397,18 @@ def proxy_forward(target_url, path):
                                 continue
 
                             data = json.loads(raw_line)
-                            eval_tokens, prompt_tokens, eval_dur, prompt_dur, done_reason = parse_token_stats(data, path)
+                            parsed_eval, parsed_prompt, eval_dur, prompt_dur, parsed_done_reason = parse_token_stats(data, path)
+                            # Keep non-zero stats discovered anywhere in the stream.
+                            if parsed_eval > 0:
+                                eval_tokens = parsed_eval
+                            if parsed_prompt > 0:
+                                prompt_tokens = parsed_prompt
                             if eval_dur > 0:
-                                tok_per_sec = round(eval_tokens / max(eval_dur / 1e9, 0.001), 2)
+                                tok_per_sec = round(parsed_eval / max(eval_dur / 1e9, 0.001), 2)
                             if prompt_dur > 0:
-                                prompt_tok_per_sec = round(prompt_tokens / max(prompt_dur / 1e9, 0.001), 2)
+                                prompt_tok_per_sec = round(parsed_prompt / max(prompt_dur / 1e9, 0.001), 2)
+                            if parsed_done_reason:
+                                done_reason = parsed_done_reason
                             model_name = data.get('model', model_name)
                             if data.get('done'):
                                 break
