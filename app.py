@@ -25,6 +25,7 @@ DATA_DIR = os.environ.get('DATA_DIR', '/data')
 HISTORY_FILE = os.path.join(DATA_DIR, 'history.json')
 POLL_INTERVAL = int(os.environ.get('POLL_INTERVAL', 5))
 PROXY_PORT = int(os.environ.get('PROXY_PORT', 11434))
+PROXY_TIMEOUT = int(os.environ.get('PROXY_TIMEOUT', 600))
 
 # Authentication — empty = no auth required
 DASHBOARD_PASSWORD = os.environ.get('DASHBOARD_PASSWORD', '')
@@ -260,55 +261,115 @@ def _fmt_duration(ms):
     s = int(round(s % 60))
     return f"{m}m{s}s"
 
+def parse_token_stats(data, path):
+    """Parse token stats from response data, handling both Ollama and OpenAI formats.
+
+    Ollama native: eval_count, prompt_eval_count, eval_duration, prompt_eval_duration
+    OpenAI compat: usage.completion_tokens, usage.prompt_tokens (no duration info)
+    """
+    eval_tokens = 0
+    prompt_tokens = 0
+    eval_dur = 0
+    prompt_dur = 0
+    done_reason = ""
+
+    # Check if this is a streaming done response (Ollama format)
+    if data.get('done'):
+        eval_tokens = data.get('eval_count', 0)
+        prompt_tokens = data.get('prompt_eval_count', 0)
+        eval_dur = data.get('eval_duration', 0)
+        prompt_dur = data.get('prompt_eval_duration', 0)
+        done_reason = data.get('done_reason', '')
+    # Check for OpenAI-compatible usage block
+    elif 'usage' in data:
+        usage = data.get('usage', {})
+        eval_tokens = usage.get('completion_tokens', usage.get('output_tokens', 0))
+        prompt_tokens = usage.get('prompt_tokens', usage.get('input_tokens', 0))
+        done_reason = data.get('finish_reason', '')
+    # Anthropic-style message_start can nest usage under message.usage
+    elif isinstance(data.get('message'), dict) and isinstance(data['message'].get('usage'), dict):
+        usage = data['message']['usage']
+        eval_tokens = usage.get('output_tokens', usage.get('completion_tokens', 0))
+        prompt_tokens = usage.get('input_tokens', usage.get('prompt_tokens', 0))
+        done_reason = data.get('stop_reason', data.get('type', ''))
+    # Anthropic-style message_delta can include usage at top level
+    elif data.get('type') == 'message_delta' and isinstance(data.get('usage'), dict):
+        usage = data.get('usage', {})
+        eval_tokens = usage.get('output_tokens', usage.get('completion_tokens', 0))
+        prompt_tokens = usage.get('input_tokens', usage.get('prompt_tokens', 0))
+        done_reason = data.get('delta', {}).get('stop_reason', '')
+    # Fallback: direct field lookup
+    else:
+        eval_tokens = data.get('eval_count', data.get('output_tokens', 0))
+        prompt_tokens = data.get('prompt_eval_count', data.get('input_tokens', 0))
+        done_reason = data.get('done_reason', data.get('finish_reason', ''))
+
+    return eval_tokens, prompt_tokens, eval_dur, prompt_dur, done_reason
+
+
 # ══════════════════════════════════════════════════════════════════
 #  OLLAMA API PROXY — runs on port 11434
 #  Forwards all requests to Ollama, captures token stats
 # ══════════════════════════════════════════════════════════════════
 
-@proxy_app.route('/', defaults={'path': ''}, methods=['GET', 'POST', 'PUT', 'DELETE', 'PATCH'])
-@proxy_app.route('/<path:path>', methods=['GET', 'POST', 'PUT', 'DELETE', 'PATCH'])
-def proxy_handler(path):
-    """Transparent proxy: forward to Ollama, capture token stats from responses."""
-    target_url = f"{OLLAMA_URL}/{path}"
+def proxy_forward(target_url, path):
+    """Forward request to Ollama (common code for proxy handler)."""
     client_ip = flask_request.remote_addr or "unknown"
     method = flask_request.method
     start_ts = time.time()
 
-    # Forward headers (skip hop-by-hop)
     skip_headers = {'host', 'transfer-encoding', 'connection'}
     fwd_headers = {k: v for k, v in flask_request.headers if k.lower() not in skip_headers}
 
-    # Determine if this is a chat/generate request we should track
-    is_trackable = path in ('api/chat', 'api/generate')
+    is_trackable = path in ('api/chat', 'api/generate') or path.startswith('v1/')
 
-    # Get request body
     body = flask_request.get_data()
     body_json = None
-    is_streaming = True  # Ollama defaults to streaming
+    is_streaming = True
 
-    if body and is_trackable:
+    if body:
         try:
             body_json = json.loads(body)
             is_streaming = body_json.get('stream', True)
         except:
             pass
 
-    # Capture path now (request context won't be available inside generators)
-    req_path = f"/{path}"
+    req_path = flask_request.full_path.rstrip('?')
+
+    def build_proxy_entry(status_code, model_name='—', tokens=0, prompt_tokens=0,
+                          tokens_per_sec=0, prompt_tok_per_sec=0, done_reason=''):
+        elapsed_ms = (time.time() - start_ts) * 1000
+        now = datetime.now()
+        return {
+            "time": now.isoformat(),
+            "time_display": now.strftime("%Y/%m/%d - %H:%M:%S"),
+            "status": status_code,
+            "duration": _fmt_duration(elapsed_ms),
+            "duration_ms": round(elapsed_ms, 1),
+            "client_ip": client_ip,
+            "method": method,
+            "path": req_path,
+            "model": model_name,
+            "tokens": tokens,
+            "prompt_tokens": prompt_tokens,
+            "total_tokens": tokens + prompt_tokens,
+            "tokens_per_sec": tokens_per_sec,
+            "prompt_tok_per_sec": prompt_tok_per_sec,
+            "done_reason": done_reason,
+            "source": "proxy",
+        }
 
     try:
-        # Forward the request to Ollama
         ollama_resp = requests.request(
             method=method,
             url=target_url,
             headers=fwd_headers,
             data=body,
             stream=True,
-            timeout=600
+            timeout=PROXY_TIMEOUT
         )
 
         if is_trackable and is_streaming:
-            # ── Streaming: raw byte passthrough, parse stats after ──
             def stream_and_capture():
                 accumulated = b''
                 for chunk in ollama_resp.iter_content(chunk_size=None):
@@ -316,9 +377,7 @@ def proxy_handler(path):
                         yield chunk
                         accumulated += chunk
 
-                # Parse accumulated NDJSON for final stats
                 model_name = body_json.get('model', '—') if body_json else '—'
-                elapsed_ms = (time.time() - start_ts) * 1000
                 eval_tokens = 0
                 prompt_tokens = 0
                 tok_per_sec = 0
@@ -329,53 +388,60 @@ def proxy_handler(path):
                     lines = accumulated.decode('utf-8', errors='replace').strip().split('\n')
                     for line in reversed(lines):
                         try:
-                            data = json.loads(line)
+                            raw_line = line.strip()
+                            if not raw_line:
+                                continue
+                            # SSE streams use "data: {json}" lines and can include control frames.
+                            if raw_line.startswith('data:'):
+                                raw_line = raw_line[5:].strip()
+                            if not raw_line or raw_line == '[DONE]':
+                                continue
+
+                            data = json.loads(raw_line)
+                            parsed_eval, parsed_prompt, eval_dur, prompt_dur, parsed_done_reason = parse_token_stats(data, path)
+                            # Keep non-zero stats discovered anywhere in the stream.
+                            if parsed_eval > 0:
+                                eval_tokens = parsed_eval
+                            if parsed_prompt > 0:
+                                prompt_tokens = parsed_prompt
+                            if eval_dur > 0:
+                                tok_per_sec = round(parsed_eval / max(eval_dur / 1e9, 0.001), 2)
+                            if prompt_dur > 0:
+                                prompt_tok_per_sec = round(parsed_prompt / max(prompt_dur / 1e9, 0.001), 2)
+                            if parsed_done_reason:
+                                done_reason = parsed_done_reason
+                            model_name = data.get('model', model_name)
                             if data.get('done'):
-                                eval_tokens = data.get('eval_count', 0)
-                                prompt_tokens = data.get('prompt_eval_count', 0)
-                                eval_dur = data.get('eval_duration', 0)
-                                prompt_dur = data.get('prompt_eval_duration', 0)
-                                done_reason = data.get('done_reason', '')
-                                if eval_dur > 0:
-                                    tok_per_sec = round(eval_tokens / max(eval_dur / 1e9, 0.001), 2)
-                                if prompt_dur > 0:
-                                    prompt_tok_per_sec = round(prompt_tokens / max(prompt_dur / 1e9, 0.001), 2)
-                                model_name = data.get('model', model_name)
                                 break
                         except:
                             continue
                 except:
                     pass
 
-                entry = {
-                    "time": datetime.now().isoformat(),
-                    "time_display": datetime.now().strftime("%Y/%m/%d - %H:%M:%S"),
-                    "status": ollama_resp.status_code,
-                    "duration": _fmt_duration(elapsed_ms),
-                    "duration_ms": round(elapsed_ms, 1),
-                    "client_ip": client_ip,
-                    "method": method,
-                    "path": req_path,
-                    "model": model_name,
-                    "tokens": eval_tokens,
-                    "prompt_tokens": prompt_tokens,
-                    "total_tokens": eval_tokens + prompt_tokens,
-                    "tokens_per_sec": tok_per_sec,
-                    "prompt_tok_per_sec": prompt_tok_per_sec,
-                    "done_reason": done_reason,
-                    "source": "proxy",
-                }
+                # Fallback for APIs that return token usage but no eval_duration fields.
+                elapsed_s = max(time.time() - start_ts, 0.001)
+                if tok_per_sec <= 0 and eval_tokens > 0:
+                    tok_per_sec = round(eval_tokens / elapsed_s, 2)
+                if prompt_tok_per_sec <= 0 and prompt_tokens > 0:
+                    prompt_tok_per_sec = round(prompt_tokens / elapsed_s, 2)
+
+                entry = build_proxy_entry(
+                    status_code=ollama_resp.status_code,
+                    model_name=model_name,
+                    tokens=eval_tokens,
+                    prompt_tokens=prompt_tokens,
+                    tokens_per_sec=tok_per_sec,
+                    prompt_tok_per_sec=prompt_tok_per_sec,
+                    done_reason=done_reason
+                )
                 log_request(entry)
 
-            # Mirror Ollama's content type exactly
             ct = ollama_resp.headers.get('Content-Type', 'application/x-ndjson')
             return Response(stream_and_capture(), status=ollama_resp.status_code,
                            content_type=ct, direct_passthrough=True)
 
         elif is_trackable and not is_streaming:
-            # ── Non-streaming: read full response, capture stats ──
             resp_data = ollama_resp.content
-            elapsed_ms = (time.time() - start_ts) * 1000
 
             model_name = body_json.get('model', '—') if body_json else '—'
             eval_tokens = 0
@@ -387,11 +453,7 @@ def proxy_handler(path):
             try:
                 data = json.loads(resp_data)
                 model_name = data.get('model', model_name)
-                eval_tokens = data.get('eval_count', 0)
-                prompt_tokens = data.get('prompt_eval_count', 0)
-                eval_dur = data.get('eval_duration', 0)
-                prompt_dur = data.get('prompt_eval_duration', 0)
-                done_reason = data.get('done_reason', '')
+                eval_tokens, prompt_tokens, eval_dur, prompt_dur, done_reason = parse_token_stats(data, path)
                 if eval_dur > 0:
                     tok_per_sec = round(eval_tokens / max(eval_dur / 1e9, 0.001), 2)
                 if prompt_dur > 0:
@@ -399,32 +461,34 @@ def proxy_handler(path):
             except:
                 pass
 
-            entry = {
-                "time": datetime.now().isoformat(),
-                "time_display": datetime.now().strftime("%Y/%m/%d - %H:%M:%S"),
-                "status": ollama_resp.status_code,
-                "duration": _fmt_duration(elapsed_ms),
-                "duration_ms": round(elapsed_ms, 1),
-                "client_ip": client_ip,
-                "method": method,
-                "path": req_path,
-                "model": model_name,
-                "tokens": eval_tokens,
-                "prompt_tokens": prompt_tokens,
-                "total_tokens": eval_tokens + prompt_tokens,
-                "tokens_per_sec": tok_per_sec,
-                "prompt_tok_per_sec": prompt_tok_per_sec,
-                "done_reason": done_reason,
-                "source": "proxy",
-            }
+            # Fallback for APIs that return usage without explicit duration fields.
+            elapsed_s = max(time.time() - start_ts, 0.001)
+            if tok_per_sec <= 0 and eval_tokens > 0:
+                tok_per_sec = round(eval_tokens / elapsed_s, 2)
+            if prompt_tok_per_sec <= 0 and prompt_tokens > 0:
+                prompt_tok_per_sec = round(prompt_tokens / elapsed_s, 2)
+
+            entry = build_proxy_entry(
+                status_code=ollama_resp.status_code,
+                model_name=model_name,
+                tokens=eval_tokens,
+                prompt_tokens=prompt_tokens,
+                tokens_per_sec=tok_per_sec,
+                prompt_tok_per_sec=prompt_tok_per_sec,
+                done_reason=done_reason
+            )
             log_request(entry)
 
-            # Return exact response from Ollama
             ct = ollama_resp.headers.get('Content-Type', 'application/json')
             return Response(resp_data, status=ollama_resp.status_code, content_type=ct)
 
         else:
-            # ── Non-trackable: pure passthrough ──
+            model_name = body_json.get('model', '—') if isinstance(body_json, dict) else '—'
+            log_request(build_proxy_entry(
+                status_code=ollama_resp.status_code,
+                model_name=model_name
+            ))
+
             def passthrough():
                 for chunk in ollama_resp.iter_content(chunk_size=None):
                     if chunk:
@@ -435,11 +499,22 @@ def proxy_handler(path):
                            content_type=ct, direct_passthrough=True)
 
     except requests.exceptions.ConnectionError:
+        log_request(build_proxy_entry(status_code=502, done_reason="ConnectionError"))
         return jsonify({"error": "Cannot connect to Ollama"}), 502
     except requests.exceptions.Timeout:
+        log_request(build_proxy_entry(status_code=504, done_reason="Timeout"))
         return jsonify({"error": "Ollama request timed out"}), 504
     except Exception as e:
+        log_request(build_proxy_entry(status_code=500, done_reason=f"ProxyError: {str(e)}"))
         return jsonify({"error": str(e)}), 500
+
+
+@proxy_app.route('/', defaults={'path': ''}, methods=['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD', 'OPTIONS'])
+@proxy_app.route('/<path:path>', methods=['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD', 'OPTIONS'])
+def proxy_handler(path):
+    """Transparent proxy: forward to Ollama, capture token stats from responses."""
+    target_url = f"{OLLAMA_URL}/{path}" if path else OLLAMA_URL
+    return proxy_forward(target_url, path)
 
 
 # ── Background poller ────────────────────────────────────────────
@@ -598,6 +673,7 @@ def api_status():
     data["dashboard_start"] = start_time
     data["ollama_url"] = OLLAMA_URL
     data["proxy_port"] = PROXY_PORT
+    data["proxy_timeout"] = PROXY_TIMEOUT
     data["proxy_ip"] = proxy_self_ip or "unknown"
     return jsonify(data)
 
@@ -831,9 +907,13 @@ if __name__ == '__main__':
 
     # Start proxy on port 11434 in background thread
     def run_proxy():
-        print(f"[PROXY] Ollama API Proxy starting on port {PROXY_PORT}")
-        print(f"[PROXY] Forwarding to: {OLLAMA_URL}")
-        proxy_app.run(host='0.0.0.0', port=PROXY_PORT, debug=False, threaded=True)
+        print(f"[PROXY] Ollama API Proxy starting on port {PROXY_PORT}", flush=True)
+        print(f"[PROXY] Forwarding to: {OLLAMA_URL}", flush=True)
+        print(f"[PROXY] Timeout: {PROXY_TIMEOUT}s", flush=True)
+        try:
+            proxy_app.run(host='0.0.0.0', port=PROXY_PORT, debug=False, threaded=True)
+        except Exception as e:
+            print(f"[PROXY ERROR] {e}", flush=True)
 
     threading.Thread(target=run_proxy, daemon=True).start()
 

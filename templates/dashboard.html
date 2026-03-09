@@ -248,6 +248,18 @@ tr:hover td { background:var(--glow-1); }
 .td-model { color:var(--accent-4); font-weight:500; font-size:12px; }
 .td-tok { color:var(--accent-1); font-weight:500; }
 .client-icon { margin-right:3px; }
+.req-model { color:var(--accent-4); font-weight:500; }
+.req-flag {
+  display:inline-block; font-size:11px; letter-spacing:1px; text-transform:uppercase;
+  padding:2px 6px; border-radius:4px; margin-right:6px; border:1px solid transparent;
+}
+.req-flag.err { color:var(--accent-err); border-color:rgba(255,59,74,0.4); background:rgba(255,59,74,0.12); }
+.req-flag.warn { color:var(--accent-2); border-color:rgba(240,160,48,0.4); background:rgba(240,160,48,0.12); }
+.req-msg { color:var(--text-dim); font-size:12px; }
+tr.row-error td { background:rgba(255,59,74,0.06); }
+tr.row-warn td { background:rgba(240,160,48,0.05); }
+tr.row-error:hover td { background:rgba(255,59,74,0.12); }
+tr.row-warn:hover td { background:rgba(240,160,48,0.10); }
 
 /* ── Load More ──────────────────────────────────────────────── */
 .load-more-row td { text-align:center; padding:12px; }
@@ -1150,6 +1162,17 @@ function sortEntries(entries) {
   });
 }
 
+function getRequestStatus(r) {
+  const status = Number(r.status || 0);
+  const reason = String(r.done_reason || '').trim();
+  if (status >= 500) return { label:`ERR ${status}`, detail:reason || 'Upstream error', rowClass:'row-error', cls:'err' };
+  if (status >= 400) return { label:`WARN ${status}`, detail:reason || 'Request error', rowClass:'row-warn', cls:'warn' };
+  if (reason && /(timeout|error|failed|connection)/i.test(reason)) {
+    return { label:'WARN', detail:reason, rowClass:'row-warn', cls:'warn' };
+  }
+  return null;
+}
+
 // ── Popup ───────────────────────────────────────────────────
 function showPopup(idx) {
   const filtered = filterEntries(allHistory.requests||[], currentFilter);
@@ -1162,6 +1185,7 @@ function showPopup(idx) {
     { label:'Client', value:`${client.icon} ${client.name} (${r.client_ip||'?'})`, cls:'accent3' },
     { label:'Endpoint', value:r.path||'—', cls:'accent3' },
     { label:'Method', value:r.method||'—', cls:'' },
+    { label:'Status', value:r.status ? String(r.status) : '—', cls:(r.status>=400?'accent2':'') },
     { label:'Model', value:r.model||'—', cls:'accent4' },
     { label:'Duration', value:r.duration||'—', cls:'accent2' },
     { label:'In Tokens', value:r.prompt_tokens||0, cls:'accent1' },
@@ -1616,10 +1640,16 @@ function renderHistory() {
       const inTok = (r.prompt_tokens && r.prompt_tokens > 0) ? r.prompt_tokens : '—';
       const outTok = (r.tokens && r.tokens > 0) ? r.tokens : '—';
       const tps = (r.tokens_per_sec && r.tokens_per_sec > 0) ? r.tokens_per_sec.toFixed(1) : '—';
-      return `<tr class="clickable-row" onclick="showPopup(${i})">
+      const statusInfo = getRequestStatus(r);
+      const modelText = (r.model && r.model !== '—') ? r.model : '—';
+      const modelCell = statusInfo
+        ? `<span class="req-flag ${statusInfo.cls}">${statusInfo.label}</span><span class="req-msg">${statusInfo.detail}</span>`
+        : `<span class="req-model">${modelText}</span>`;
+      const rowClass = statusInfo ? `clickable-row ${statusInfo.rowClass}` : 'clickable-row';
+      return `<tr class="${rowClass}" onclick="showPopup(${i})">
         <td class="td-dim">${fmtTime(r.time)}</td>
         <td class="td-dur hide-mobile">${r.duration||'—'}</td>
-        <td class="td-model">${r.model||'—'}</td>
+        <td class="td-model">${modelCell}</td>
         <td class="td-tok">${inTok}</td>
         <td class="td-tok">${outTok}</td>
         <td class="td-dur">${tps}</td>
