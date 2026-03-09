@@ -25,6 +25,7 @@ DATA_DIR = os.environ.get('DATA_DIR', '/data')
 HISTORY_FILE = os.path.join(DATA_DIR, 'history.json')
 POLL_INTERVAL = int(os.environ.get('POLL_INTERVAL', 5))
 PROXY_PORT = int(os.environ.get('PROXY_PORT', 11434))
+PROXY_TIMEOUT = int(os.environ.get('PROXY_TIMEOUT', 600))
 
 # Authentication — empty = no auth required
 DASHBOARD_PASSWORD = os.environ.get('DASHBOARD_PASSWORD', '')
@@ -365,7 +366,7 @@ def proxy_forward(target_url, path):
             headers=fwd_headers,
             data=body,
             stream=True,
-            timeout=600
+            timeout=PROXY_TIMEOUT
         )
 
         if is_trackable and is_streaming:
@@ -672,6 +673,7 @@ def api_status():
     data["dashboard_start"] = start_time
     data["ollama_url"] = OLLAMA_URL
     data["proxy_port"] = PROXY_PORT
+    data["proxy_timeout"] = PROXY_TIMEOUT
     data["proxy_ip"] = proxy_self_ip or "unknown"
     return jsonify(data)
 
@@ -907,6 +909,7 @@ if __name__ == '__main__':
     def run_proxy():
         print(f"[PROXY] Ollama API Proxy starting on port {PROXY_PORT}", flush=True)
         print(f"[PROXY] Forwarding to: {OLLAMA_URL}", flush=True)
+        print(f"[PROXY] Timeout: {PROXY_TIMEOUT}s", flush=True)
         try:
             proxy_app.run(host='0.0.0.0', port=PROXY_PORT, debug=False, threaded=True)
         except Exception as e:
