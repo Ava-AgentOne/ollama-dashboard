@@ -312,6 +312,56 @@ def parse_token_stats(data, path):
 #  Forwards all requests to Ollama, captures token stats
 # ══════════════════════════════════════════════════════════════════
 
+def _extract_input_text(body_json, path):
+    """Extract human-readable input text from a request body."""
+    if not isinstance(body_json, dict):
+        return ''
+    # Ollama /api/chat
+    msgs = body_json.get('messages')
+    if isinstance(msgs, list):
+        parts = []
+        for m in msgs:
+            role = m.get('role', '')
+            content = m.get('content', '')
+            if content:
+                parts.append(f"[{role}] {content}")
+        return '\n'.join(parts)
+    # Ollama /api/generate
+    prompt = body_json.get('prompt')
+    if prompt:
+        return prompt
+    return ''
+
+
+def _extract_output_text_streaming(accumulated_bytes, path):
+    """Extract output text from accumulated streaming response bytes."""
+    lines = accumulated_bytes.decode('utf-8', errors='replace').strip().split('\n')
+    content_parts = []
+    for line in lines:
+        raw = line.strip()
+        if raw.startswith('data:'):
+            raw = raw[5:].strip()
+        if not raw or raw == '[DONE]':
+            continue
+        try:
+            data = json.loads(raw)
+        except:
+            continue
+        # Ollama native: response (generate) or message.content (chat)
+        c = data.get('response', '')
+        if not c:
+            msg = data.get('message')
+            if isinstance(msg, dict):
+                c = msg.get('content', '')
+        # OpenAI compat: choices[0].delta.content
+        if not c:
+            choices = data.get('choices')
+            if isinstance(choices, list) and choices:
+                c = choices[0].get('delta', {}).get('content', '')
+        if c:
+            content_parts.append(c)
+    return ''.join(content_parts)
+
 def proxy_forward(target_url, path):
     """Forward request to Ollama (common code for proxy handler)."""
     client_ip = flask_request.remote_addr or "unknown"
@@ -343,11 +393,14 @@ def proxy_forward(target_url, path):
 
     req_path = flask_request.full_path.rstrip('?')
 
+    log_prompts = load_settings().get('log_prompts', False)
+
     def build_proxy_entry(status_code, model_name='—', tokens=0, prompt_tokens=0,
-                          tokens_per_sec=0, prompt_tok_per_sec=0, done_reason=''):
+                          tokens_per_sec=0, prompt_tok_per_sec=0, done_reason='',
+                          input_text='', output_text=''):
         elapsed_ms = (time.time() - start_ts) * 1000
         now = datetime.now()
-        return {
+        entry = {
             "time": now.isoformat(),
             "time_display": now.strftime("%Y/%m/%d - %H:%M:%S"),
             "status": status_code,
@@ -365,6 +418,11 @@ def proxy_forward(target_url, path):
             "done_reason": done_reason,
             "source": "proxy",
         }
+        if log_prompts and input_text:
+            entry["input_text"] = input_text
+        if log_prompts and output_text:
+            entry["output_text"] = output_text
+        return entry
 
     try:
         ollama_resp = requests.request(
@@ -432,6 +490,12 @@ def proxy_forward(target_url, path):
                 if prompt_tok_per_sec <= 0 and prompt_tokens > 0:
                     prompt_tok_per_sec = round(prompt_tokens / elapsed_s, 2)
 
+                input_text = ''
+                output_text = ''
+                if log_prompts:
+                    input_text = _extract_input_text(body_json, path)
+                    output_text = _extract_output_text_streaming(accumulated, path)
+
                 entry = build_proxy_entry(
                     status_code=ollama_resp.status_code,
                     model_name=model_name,
@@ -439,7 +503,9 @@ def proxy_forward(target_url, path):
                     prompt_tokens=prompt_tokens,
                     tokens_per_sec=tok_per_sec,
                     prompt_tok_per_sec=prompt_tok_per_sec,
-                    done_reason=done_reason
+                    done_reason=done_reason,
+                    input_text=input_text,
+                    output_text=output_text
                 )
                 log_request(entry)
 
@@ -475,6 +541,26 @@ def proxy_forward(target_url, path):
             if prompt_tok_per_sec <= 0 and prompt_tokens > 0:
                 prompt_tok_per_sec = round(prompt_tokens / elapsed_s, 2)
 
+            input_text = ''
+            output_text = ''
+            if log_prompts:
+                input_text = _extract_input_text(body_json, path)
+                try:
+                    rd = json.loads(resp_data)
+                    # Ollama native
+                    output_text = rd.get('response', '')
+                    if not output_text:
+                        msg = rd.get('message')
+                        if isinstance(msg, dict):
+                            output_text = msg.get('content', '')
+                    # OpenAI compat
+                    if not output_text:
+                        choices = rd.get('choices')
+                        if isinstance(choices, list) and choices:
+                            output_text = choices[0].get('message', {}).get('content', '')
+                except:
+                    pass
+
             entry = build_proxy_entry(
                 status_code=ollama_resp.status_code,
                 model_name=model_name,
@@ -482,7 +568,9 @@ def proxy_forward(target_url, path):
                 prompt_tokens=prompt_tokens,
                 tokens_per_sec=tok_per_sec,
                 prompt_tok_per_sec=prompt_tok_per_sec,
-                done_reason=done_reason
+                done_reason=done_reason,
+                input_text=input_text,
+                output_text=output_text
             )
             log_request(entry)
 
@@ -669,7 +757,7 @@ def api_settings_get():
 def api_settings_save():
     data = flask_request.get_json(force=True)
     settings = load_settings()
-    allowed = ['poll_interval', 'client_map', 'retention_months', 'theme', 'mode', 'sync_theme']
+    allowed = ['poll_interval', 'client_map', 'retention_months', 'theme', 'mode', 'sync_theme', 'log_prompts']
     for k in allowed:
         if k in data:
             settings[k] = data[k]
