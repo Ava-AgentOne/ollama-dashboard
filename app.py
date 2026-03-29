@@ -331,6 +331,13 @@ def proxy_forward(target_url, path):
         try:
             body_json = json.loads(body)
             is_streaming = body_json.get('stream', True)
+            # Inject stream_options.include_usage for OpenAI-compatible streaming
+            # so Ollama emits a final chunk with token usage stats.
+            if is_streaming and path.startswith('v1/'):
+                so = body_json.setdefault('stream_options', {})
+                if not so.get('include_usage'):
+                    so['include_usage'] = True
+                    body = json.dumps(body_json).encode()
         except:
             pass
 
