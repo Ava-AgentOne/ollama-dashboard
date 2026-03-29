@@ -278,8 +278,8 @@ tr.row-warn:hover td { background:rgba(240,160,48,0.10); }
 .popup-overlay.show { display:flex; }
 .popup-card {
   background:var(--bg-panel); border:1px solid var(--border-glow);
-  border-radius:var(--radius); padding:20px 24px; min-width:340px; max-width:480px;
-  box-shadow:0 8px 32px rgba(0,0,0,0.4); position:relative;
+  border-radius:var(--radius); padding:20px 24px; min-width:340px; max-width:700px; width:90vw;
+  box-shadow:0 8px 32px rgba(0,0,0,0.4); position:relative; max-height:85vh; overflow-y:auto;
 }
 .popup-close {
   position:absolute; top:10px; right:14px; background:none; border:none;
@@ -299,6 +299,16 @@ tr.row-warn:hover td { background:rgba(240,160,48,0.10); }
 .popup-value.accent2 { color:var(--accent-2); }
 .popup-value.accent3 { color:var(--accent-3); }
 .popup-value.accent4 { color:var(--accent-4); }
+.popup-text-block {
+  grid-column:1/-1; margin-top:8px; padding:10px 12px;
+  background:var(--bg-card); border:1px solid var(--border); border-radius:var(--radius);
+  font-size:13px; line-height:1.5; color:var(--text-primary);
+  white-space:pre-wrap; word-break:break-word; max-height:200px; overflow-y:auto;
+}
+.popup-text-label {
+  grid-column:1/-1; font-size:11px; letter-spacing:1.5px; text-transform:uppercase;
+  color:var(--text-muted); margin-top:10px; margin-bottom:-4px;
+}
 
 /* ── Status pips ─────────────────────────────────────────────── */
 .pip { width:6px; height:6px; border-radius:50%; display:inline-block; margin-right:4px; }
@@ -828,6 +838,18 @@ docker build --no-cache -t ollama-intel .
       </div>
     </div>
 
+    <!-- Logging -->
+    <div class="settings-section">
+      <h3>Logging</h3>
+      <div class="setting-row">
+        <div class="setting-label">Log prompts &amp; responses<small>Store full input/output text in request history</small></div>
+        <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
+          <input type="checkbox" id="setLogPrompts" style="cursor:pointer;">
+          <span style="font-size:12px;color:var(--text-dim);">Enable</span>
+        </label>
+      </div>
+    </div>
+
     <!-- Appearance -->
     <div class="settings-section">
       <h3>Appearance</h3>
@@ -1198,9 +1220,20 @@ function showPopup(idx) {
   if (r.done_reason) items.push({ label:'Done Reason', value:r.done_reason, cls:'' });
 
   document.getElementById('popupTitle').textContent = `${client.icon} ${r.model || 'Request'} — ${fmtTime(r.time)}`;
-  document.getElementById('popupGrid').innerHTML = items.map(i =>
+  let html = items.map(i =>
     `<div class="popup-item"><div class="popup-label">${i.label}</div><div class="popup-value ${i.cls}">${i.value}</div></div>`
   ).join('');
+
+  if (r.input_text) {
+    const escaped = r.input_text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    html += `<div class="popup-text-label">Input</div><div class="popup-text-block">${escaped}</div>`;
+  }
+  if (r.output_text) {
+    const escaped = r.output_text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    html += `<div class="popup-text-label">Output</div><div class="popup-text-block">${escaped}</div>`;
+  }
+
+  document.getElementById('popupGrid').innerHTML = html;
   document.getElementById('popupOverlay').classList.add('show');
 }
 function closePopup(e) {
@@ -1971,6 +2004,7 @@ async function loadSettingsUI() {
     document.getElementById('setPollInterval').value = settingsData.poll_interval || 5;
     document.getElementById('setRetention').value = settingsData.retention_months || 6;
     document.getElementById('setSyncTheme').checked = settingsData.sync_theme || false;
+    document.getElementById('setLogPrompts').checked = settingsData.log_prompts || false;
 
     renderClientMapEditor(settingsData.client_map || {});
 
@@ -2045,6 +2079,7 @@ async function saveSettings() {
     retention_months: parseInt(document.getElementById('setRetention').value) || 6,
     client_map: collectClientMap(),
     sync_theme: document.getElementById('setSyncTheme').checked,
+    log_prompts: document.getElementById('setLogPrompts').checked,
   };
 
   // If sync theme is on, save current theme/mode
