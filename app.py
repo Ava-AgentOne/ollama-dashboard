@@ -491,10 +491,13 @@ def proxy_forward(target_url, path):
 
         else:
             model_name = body_json.get('model', '—') if isinstance(body_json, dict) else '—'
-            log_request(build_proxy_entry(
-                status_code=ollama_resp.status_code,
-                model_name=model_name
-            ))
+            # Only log non-trackable requests that carry a real model name;
+            # skip health-check pings and other noise (HEAD /, GET /api/tags, …).
+            if model_name and model_name != '—':
+                log_request(build_proxy_entry(
+                    status_code=ollama_resp.status_code,
+                    model_name=model_name
+                ))
 
             def passthrough():
                 for chunk in ollama_resp.iter_content(chunk_size=None):
