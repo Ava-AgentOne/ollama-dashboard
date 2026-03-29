@@ -248,6 +248,18 @@ tr:hover td { background:var(--glow-1); }
 .td-model { color:var(--accent-4); font-weight:500; font-size:12px; }
 .td-tok { color:var(--accent-1); font-weight:500; }
 .client-icon { margin-right:3px; }
+.req-model { color:var(--accent-4); font-weight:500; }
+.req-flag {
+  display:inline-block; font-size:11px; letter-spacing:1px; text-transform:uppercase;
+  padding:2px 6px; border-radius:4px; margin-right:6px; border:1px solid transparent;
+}
+.req-flag.err { color:var(--accent-err); border-color:rgba(255,59,74,0.4); background:rgba(255,59,74,0.12); }
+.req-flag.warn { color:var(--accent-2); border-color:rgba(240,160,48,0.4); background:rgba(240,160,48,0.12); }
+.req-msg { color:var(--text-dim); font-size:12px; }
+tr.row-error td { background:rgba(255,59,74,0.06); }
+tr.row-warn td { background:rgba(240,160,48,0.05); }
+tr.row-error:hover td { background:rgba(255,59,74,0.12); }
+tr.row-warn:hover td { background:rgba(240,160,48,0.10); }
 
 /* ── Load More ──────────────────────────────────────────────── */
 .load-more-row td { text-align:center; padding:12px; }
@@ -266,8 +278,8 @@ tr:hover td { background:var(--glow-1); }
 .popup-overlay.show { display:flex; }
 .popup-card {
   background:var(--bg-panel); border:1px solid var(--border-glow);
-  border-radius:var(--radius); padding:20px 24px; min-width:340px; max-width:480px;
-  box-shadow:0 8px 32px rgba(0,0,0,0.4); position:relative;
+  border-radius:var(--radius); padding:20px 24px; min-width:340px; max-width:700px; width:90vw;
+  box-shadow:0 8px 32px rgba(0,0,0,0.4); position:relative; max-height:85vh; overflow-y:auto;
 }
 .popup-close {
   position:absolute; top:10px; right:14px; background:none; border:none;
@@ -287,6 +299,16 @@ tr:hover td { background:var(--glow-1); }
 .popup-value.accent2 { color:var(--accent-2); }
 .popup-value.accent3 { color:var(--accent-3); }
 .popup-value.accent4 { color:var(--accent-4); }
+.popup-text-block {
+  grid-column:1/-1; margin-top:8px; padding:10px 12px;
+  background:var(--bg-card); border:1px solid var(--border); border-radius:var(--radius);
+  font-size:13px; line-height:1.5; color:var(--text-primary);
+  white-space:pre-wrap; word-break:break-word; max-height:200px; overflow-y:auto;
+}
+.popup-text-label {
+  grid-column:1/-1; font-size:11px; letter-spacing:1.5px; text-transform:uppercase;
+  color:var(--text-muted); margin-top:10px; margin-bottom:-4px;
+}
 
 /* ── Status pips ─────────────────────────────────────────────── */
 .pip { width:6px; height:6px; border-radius:50%; display:inline-block; margin-right:4px; }
@@ -816,6 +838,18 @@ docker build --no-cache -t ollama-intel .
       </div>
     </div>
 
+    <!-- Logging -->
+    <div class="settings-section">
+      <h3>Logging</h3>
+      <div class="setting-row">
+        <div class="setting-label">Log prompts &amp; responses<small>Store full input/output text in request history</small></div>
+        <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
+          <input type="checkbox" id="setLogPrompts" style="cursor:pointer;">
+          <span style="font-size:12px;color:var(--text-dim);">Enable</span>
+        </label>
+      </div>
+    </div>
+
     <!-- Appearance -->
     <div class="settings-section">
       <h3>Appearance</h3>
@@ -1150,8 +1184,19 @@ function sortEntries(entries) {
   });
 }
 
+function getRequestStatus(r) {
+  const status = Number(r.status || 0);
+  const reason = String(r.done_reason || '').trim();
+  if (status >= 500) return { label:`ERR ${status}`, detail:reason || 'Upstream error', rowClass:'row-error', cls:'err' };
+  if (status >= 400) return { label:`WARN ${status}`, detail:reason || 'Request error', rowClass:'row-warn', cls:'warn' };
+  if (reason && /(timeout|error|failed|connection)/i.test(reason)) {
+    return { label:'WARN', detail:reason, rowClass:'row-warn', cls:'warn' };
+  }
+  return null;
+}
+
 // ── Popup ───────────────────────────────────────────────────
-function showPopup(idx) {
+async function showPopup(idx) {
   const filtered = filterEntries(allHistory.requests||[], currentFilter);
   const sorted = sortEntries(filtered);
   const r = sorted[idx];
@@ -1162,6 +1207,7 @@ function showPopup(idx) {
     { label:'Client', value:`${client.icon} ${client.name} (${r.client_ip||'?'})`, cls:'accent3' },
     { label:'Endpoint', value:r.path||'—', cls:'accent3' },
     { label:'Method', value:r.method||'—', cls:'' },
+    { label:'Status', value:r.status ? String(r.status) : '—', cls:(r.status>=400?'accent2':'') },
     { label:'Model', value:r.model||'—', cls:'accent4' },
     { label:'Duration', value:r.duration||'—', cls:'accent2' },
     { label:'In Tokens', value:r.prompt_tokens||0, cls:'accent1' },
@@ -1174,10 +1220,31 @@ function showPopup(idx) {
   if (r.done_reason) items.push({ label:'Done Reason', value:r.done_reason, cls:'' });
 
   document.getElementById('popupTitle').textContent = `${client.icon} ${r.model || 'Request'} — ${fmtTime(r.time)}`;
-  document.getElementById('popupGrid').innerHTML = items.map(i =>
+  let html = items.map(i =>
     `<div class="popup-item"><div class="popup-label">${i.label}</div><div class="popup-value ${i.cls}">${i.value}</div></div>`
   ).join('');
+
+  // Show loading placeholder if prompt data exists
+  if (r.has_prompt && r.id) {
+    html += `<div class="popup-text-label">Input</div><div class="popup-text-block" id="popupInput" style="color:var(--text-muted)">Loading…</div>`;
+    html += `<div class="popup-text-label">Output</div><div class="popup-text-block" id="popupOutput" style="color:var(--text-muted)">Loading…</div>`;
+  }
+
+  document.getElementById('popupGrid').innerHTML = html;
   document.getElementById('popupOverlay').classList.add('show');
+
+  // Lazy-load prompt data
+  if (r.has_prompt && r.id) {
+    try {
+      const resp = await fetch(`${API}/api/prompt/${r.id}`);
+      const data = await resp.json();
+      const esc = s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+      const inputEl = document.getElementById('popupInput');
+      const outputEl = document.getElementById('popupOutput');
+      if (inputEl) { inputEl.style.color = ''; inputEl.innerHTML = data.input_text ? esc(data.input_text) : '<span style="color:var(--text-muted)">—</span>'; }
+      if (outputEl) { outputEl.style.color = ''; outputEl.innerHTML = data.output_text ? esc(data.output_text) : '<span style="color:var(--text-muted)">—</span>'; }
+    } catch(e) { console.error('Prompt load error', e); }
+  }
 }
 function closePopup(e) {
   if (e.target.id === 'popupOverlay') {
@@ -1616,10 +1683,16 @@ function renderHistory() {
       const inTok = (r.prompt_tokens && r.prompt_tokens > 0) ? r.prompt_tokens : '—';
       const outTok = (r.tokens && r.tokens > 0) ? r.tokens : '—';
       const tps = (r.tokens_per_sec && r.tokens_per_sec > 0) ? r.tokens_per_sec.toFixed(1) : '—';
-      return `<tr class="clickable-row" onclick="showPopup(${i})">
+      const statusInfo = getRequestStatus(r);
+      const modelText = (r.model && r.model !== '—') ? r.model : '—';
+      const modelCell = statusInfo
+        ? `<span class="req-flag ${statusInfo.cls}">${statusInfo.label}</span><span class="req-msg">${statusInfo.detail}</span>`
+        : `<span class="req-model">${modelText}</span>`;
+      const rowClass = statusInfo ? `clickable-row ${statusInfo.rowClass}` : 'clickable-row';
+      return `<tr class="${rowClass}" onclick="showPopup(${i})">
         <td class="td-dim">${fmtTime(r.time)}</td>
         <td class="td-dur hide-mobile">${r.duration||'—'}</td>
-        <td class="td-model">${r.model||'—'}</td>
+        <td class="td-model">${modelCell}</td>
         <td class="td-tok">${inTok}</td>
         <td class="td-tok">${outTok}</td>
         <td class="td-dur">${tps}</td>
@@ -1941,6 +2014,7 @@ async function loadSettingsUI() {
     document.getElementById('setPollInterval').value = settingsData.poll_interval || 5;
     document.getElementById('setRetention').value = settingsData.retention_months || 6;
     document.getElementById('setSyncTheme').checked = settingsData.sync_theme || false;
+    document.getElementById('setLogPrompts').checked = settingsData.log_prompts || false;
 
     renderClientMapEditor(settingsData.client_map || {});
 
@@ -2015,6 +2089,7 @@ async function saveSettings() {
     retention_months: parseInt(document.getElementById('setRetention').value) || 6,
     client_map: collectClientMap(),
     sync_theme: document.getElementById('setSyncTheme').checked,
+    log_prompts: document.getElementById('setLogPrompts').checked,
   };
 
   // If sync theme is on, save current theme/mode
