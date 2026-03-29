@@ -1196,7 +1196,7 @@ function getRequestStatus(r) {
 }
 
 // ── Popup ───────────────────────────────────────────────────
-function showPopup(idx) {
+async function showPopup(idx) {
   const filtered = filterEntries(allHistory.requests||[], currentFilter);
   const sorted = sortEntries(filtered);
   const r = sorted[idx];
@@ -1224,17 +1224,27 @@ function showPopup(idx) {
     `<div class="popup-item"><div class="popup-label">${i.label}</div><div class="popup-value ${i.cls}">${i.value}</div></div>`
   ).join('');
 
-  if (r.input_text) {
-    const escaped = r.input_text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-    html += `<div class="popup-text-label">Input</div><div class="popup-text-block">${escaped}</div>`;
-  }
-  if (r.output_text) {
-    const escaped = r.output_text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-    html += `<div class="popup-text-label">Output</div><div class="popup-text-block">${escaped}</div>`;
+  // Show loading placeholder if prompt data exists
+  if (r.has_prompt && r.id) {
+    html += `<div class="popup-text-label">Input</div><div class="popup-text-block" id="popupInput" style="color:var(--text-muted)">Loading…</div>`;
+    html += `<div class="popup-text-label">Output</div><div class="popup-text-block" id="popupOutput" style="color:var(--text-muted)">Loading…</div>`;
   }
 
   document.getElementById('popupGrid').innerHTML = html;
   document.getElementById('popupOverlay').classList.add('show');
+
+  // Lazy-load prompt data
+  if (r.has_prompt && r.id) {
+    try {
+      const resp = await fetch(`${API}/api/prompt/${r.id}`);
+      const data = await resp.json();
+      const esc = s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+      const inputEl = document.getElementById('popupInput');
+      const outputEl = document.getElementById('popupOutput');
+      if (inputEl) { inputEl.style.color = ''; inputEl.innerHTML = data.input_text ? esc(data.input_text) : '<span style="color:var(--text-muted)">—</span>'; }
+      if (outputEl) { outputEl.style.color = ''; outputEl.innerHTML = data.output_text ? esc(data.output_text) : '<span style="color:var(--text-muted)">—</span>'; }
+    } catch(e) { console.error('Prompt load error', e); }
+  }
 }
 function closePopup(e) {
   if (e.target.id === 'popupOverlay') {

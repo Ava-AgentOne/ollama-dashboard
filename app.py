@@ -23,6 +23,7 @@ OLLAMA_URL = os.environ.get('OLLAMA_URL', 'http://localhost:11434')
 OLLAMA_CONTAINER = os.environ.get('OLLAMA_CONTAINER', 'ollama-intel')
 DATA_DIR = os.environ.get('DATA_DIR', '/data')
 HISTORY_FILE = os.path.join(DATA_DIR, 'history.json')
+PROMPTS_FILE = os.path.join(DATA_DIR, 'prompts.jsonl')
 POLL_INTERVAL = int(os.environ.get('POLL_INTERVAL', 5))
 PROXY_PORT = int(os.environ.get('PROXY_PORT', 11434))
 PROXY_TIMEOUT = int(os.environ.get('PROXY_TIMEOUT', 600))
@@ -111,12 +112,36 @@ def save_history(data):
     with open(HISTORY_FILE, 'w') as f:
         json.dump(data, f, indent=2, default=str)
 
+def _append_prompt(prompt_entry):
+    """Append a prompt record to the JSONL file (append-only, no full rewrite)."""
+    try:
+        os.makedirs(DATA_DIR, exist_ok=True)
+        with open(PROMPTS_FILE, 'a') as f:
+            f.write(json.dumps(prompt_entry, default=str) + '\n')
+    except Exception as e:
+        print(f"[PROMPTS] Write error: {e}")
+
+
 def log_request(entry):
     """Thread-safe append to request history"""
+    # Extract prompt data before saving to history
+    input_text = entry.pop('input_text', '')
+    output_text = entry.pop('output_text', '')
+
     with history_lock:
         history = load_history()
         history["requests"].append(entry)
         save_history(history)
+
+    # Append prompt data to separate JSONL file (outside lock, append-only)
+    if input_text or output_text:
+        _append_prompt({
+            "id": entry.get("id", ""),
+            "time": entry.get("time", ""),
+            "model": entry.get("model", ""),
+            "input_text": input_text,
+            "output_text": output_text,
+        })
 
 # ── Request tracking from Docker logs (GIN lines only) ───────────
 last_log_ts = time.time()
@@ -404,7 +429,9 @@ def proxy_forward(target_url, path):
                           input_text='', output_text=''):
         elapsed_ms = (time.time() - start_ts) * 1000
         now = datetime.now()
+        entry_id = secrets.token_hex(8)
         entry = {
+            "id": entry_id,
             "time": now.isoformat(),
             "time_display": now.strftime("%Y/%m/%d - %H:%M:%S"),
             "status": status_code,
@@ -422,9 +449,9 @@ def proxy_forward(target_url, path):
             "done_reason": done_reason,
             "source": "proxy",
         }
-        if log_prompts and input_text:
+        if log_prompts:
+            entry["has_prompt"] = True
             entry["input_text"] = input_text
-        if log_prompts and output_text:
             entry["output_text"] = output_text
         return entry
 
@@ -859,6 +886,7 @@ def api_trim():
                 if key in history and len(history[key]) > keep:
                     history[key] = history[key][-keep:]
             save_history(history)
+            _trim_prompts_file(history)
             return jsonify({"status": "trimmed", "mode": "count", "kept": keep})
 
         elif mode == 'time':
@@ -871,15 +899,46 @@ def api_trim():
                         if entry.get("time", "") >= cutoff
                     ]
             save_history(history)
+            _trim_prompts_file(history)
             return jsonify({"status": "trimmed", "mode": "time", "months": months})
 
     return jsonify({"error": "Invalid mode"}), 400
+
+
+def _trim_prompts_file(history):
+    """Remove prompt entries whose IDs are no longer in history."""
+    if not os.path.exists(PROMPTS_FILE):
+        return
+    try:
+        keep_ids = {r.get('id') for r in history.get('requests', []) if r.get('id')}
+        kept_lines = []
+        with open(PROMPTS_FILE, 'r') as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    record = json.loads(line)
+                    if record.get('id') in keep_ids:
+                        kept_lines.append(line)
+                except:
+                    continue
+        with open(PROMPTS_FILE, 'w') as f:
+            f.write('\n'.join(kept_lines) + '\n' if kept_lines else '')
+    except Exception as e:
+        print(f"[PROMPTS] Trim error: {e}")
 
 @app.route('/api/clear', methods=['POST'])
 @login_required
 def api_clear():
     with history_lock:
         save_history({"requests": [], "benchmarks": [], "events": []})
+    # Clear prompts log
+    try:
+        if os.path.exists(PROMPTS_FILE):
+            os.remove(PROMPTS_FILE)
+    except Exception as e:
+        print(f"[PROMPTS] Clear error: {e}")
     return jsonify({"status": "cleared"})
 
 @app.route('/api/history/export')
@@ -890,6 +949,31 @@ def api_export():
     return jsonify(history), 200, {
         'Content-Disposition': f'attachment; filename=ollama-history-{datetime.now().strftime("%Y%m%d")}.json'
     }
+
+@app.route('/api/prompt/<entry_id>')
+@login_required
+def api_prompt(entry_id):
+    """Look up prompt data by entry ID from the JSONL file."""
+    try:
+        if not os.path.exists(PROMPTS_FILE):
+            return jsonify({"input_text": "", "output_text": ""})
+        with open(PROMPTS_FILE, 'r') as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    record = json.loads(line)
+                    if record.get('id') == entry_id:
+                        return jsonify({
+                            "input_text": record.get("input_text", ""),
+                            "output_text": record.get("output_text", ""),
+                        })
+                except:
+                    continue
+    except Exception as e:
+        print(f"[PROMPTS] Read error: {e}")
+    return jsonify({"input_text": "", "output_text": ""})
 
 @app.route('/api/history/stats')
 @login_required
