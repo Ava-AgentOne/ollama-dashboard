@@ -358,6 +358,10 @@ def _extract_output_text_streaming(accumulated_bytes, path):
             choices = data.get('choices')
             if isinstance(choices, list) and choices:
                 c = choices[0].get('delta', {}).get('content', '')
+        # Anthropic compat: content_block_delta -> delta.text
+        if not c:
+            if data.get('type') == 'content_block_delta':
+                c = data.get('delta', {}).get('text', '')
         if c:
             content_parts.append(c)
     return ''.join(content_parts)
@@ -558,6 +562,14 @@ def proxy_forward(target_url, path):
                         choices = rd.get('choices')
                         if isinstance(choices, list) and choices:
                             output_text = choices[0].get('message', {}).get('content', '')
+                    # Anthropic compat
+                    if not output_text:
+                        content_blocks = rd.get('content')
+                        if isinstance(content_blocks, list):
+                            output_text = ''.join(
+                                b.get('text', '') for b in content_blocks
+                                if isinstance(b, dict) and b.get('type') == 'text'
+                            )
                 except:
                     pass
 
