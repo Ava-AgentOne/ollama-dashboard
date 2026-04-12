@@ -27,6 +27,10 @@ PROMPTS_FILE = os.path.join(DATA_DIR, 'prompts.jsonl')
 POLL_INTERVAL = int(os.environ.get('POLL_INTERVAL', 5))
 PROXY_PORT = int(os.environ.get('PROXY_PORT', 11434))
 PROXY_TIMEOUT = int(os.environ.get('PROXY_TIMEOUT', 600))
+NEMO_GUARDRAILS_URL = os.environ.get('NEMO_GUARDRAILS_URL', '').strip()
+NEMO_GUARDRAILS_TIMEOUT = int(os.environ.get('NEMO_GUARDRAILS_TIMEOUT', 15))
+NEMO_GUARDRAILS_FAIL_CLOSED = os.environ.get('NEMO_GUARDRAILS_FAIL_CLOSED', 'true').lower() in ('1', 'true', 'yes', 'on')
+NEMO_GUARDRAILS_MAX_BODY = int(os.environ.get('NEMO_GUARDRAILS_MAX_BODY', 20000))
 
 # Authentication — empty = no auth required
 DASHBOARD_PASSWORD = os.environ.get('DASHBOARD_PASSWORD', '')
@@ -391,6 +395,80 @@ def _extract_output_text_streaming(accumulated_bytes, path):
             content_parts.append(c)
     return ''.join(content_parts)
 
+
+def _guardrails_payload(method, req_path, client_ip, headers, body_json, body_bytes):
+    """Build a compact payload for Nemo Guardrails pre-check."""
+    safe_headers = {}
+    for k, v in headers.items():
+        lk = k.lower()
+        if lk in ('authorization', 'cookie', 'set-cookie'):
+            continue
+        safe_headers[k] = v
+
+    payload = {
+        "method": method,
+        "path": req_path,
+        "client_ip": client_ip,
+        "headers": safe_headers,
+    }
+    if isinstance(body_json, dict):
+        payload["body"] = body_json
+    elif body_bytes:
+        payload["body_text"] = body_bytes.decode('utf-8', errors='replace')[:NEMO_GUARDRAILS_MAX_BODY]
+    return payload
+
+
+def _guardrails_check(method, req_path, client_ip, headers, body_json, body_bytes):
+    """Run Nemo Guardrails check. Returns (allowed, reason)."""
+    if not NEMO_GUARDRAILS_URL:
+        return True, ''
+
+    payload = _guardrails_payload(method, req_path, client_ip, headers, body_json, body_bytes)
+    try:
+        resp = requests.post(
+            NEMO_GUARDRAILS_URL,
+            json=payload,
+            timeout=NEMO_GUARDRAILS_TIMEOUT
+        )
+        if not resp.ok:
+            if NEMO_GUARDRAILS_FAIL_CLOSED:
+                return False, f"Guardrails service error ({resp.status_code})"
+            return True, ''
+
+        data = {}
+        try:
+            data = resp.json() if resp.content else {}
+        except Exception:
+            if NEMO_GUARDRAILS_FAIL_CLOSED:
+                return False, "Guardrails returned non-JSON response"
+            return True, ''
+
+        blocked = (
+            data.get('allowed') is False or
+            data.get('blocked') is True or
+            data.get('safe') is False or
+            str(data.get('action', '')).lower() in ('block', 'deny', 'reject') or
+            str(data.get('verdict', '')).lower() in ('block', 'deny', 'reject', 'unsafe')
+        )
+        if blocked:
+            reason = (
+                data.get('reason') or
+                data.get('message') or
+                data.get('verdict') or
+                'Flagged by Nemo Guardrails'
+            )
+            return False, str(reason)
+
+        return True, ''
+    except requests.exceptions.Timeout:
+        if NEMO_GUARDRAILS_FAIL_CLOSED:
+            return False, "Guardrails check timed out"
+        return True, ''
+    except Exception as e:
+        if NEMO_GUARDRAILS_FAIL_CLOSED:
+            return False, f"Guardrails check failed: {str(e)}"
+        return True, ''
+
 def proxy_forward(target_url, path):
     """Forward request to Ollama (common code for proxy handler)."""
     client_ip = flask_request.remote_addr or "unknown"
@@ -454,6 +532,26 @@ def proxy_forward(target_url, path):
             entry["input_text"] = input_text
             entry["output_text"] = output_text
         return entry
+
+    allowed, guardrails_reason = _guardrails_check(
+        method=method,
+        req_path=req_path,
+        client_ip=client_ip,
+        headers=fwd_headers,
+        body_json=body_json,
+        body_bytes=body
+    )
+    if not allowed:
+        model_name = body_json.get('model', '—') if isinstance(body_json, dict) else '—'
+        log_request(build_proxy_entry(
+            status_code=403,
+            model_name=model_name,
+            done_reason=f"GuardrailsBlocked: {guardrails_reason}"
+        ))
+        return jsonify({
+            "error": "blocked_by_guardrails",
+            "reason": guardrails_reason
+        }), 403
 
     try:
         ollama_resp = requests.request(
@@ -811,6 +909,8 @@ def api_status():
     data["ollama_url"] = OLLAMA_URL
     data["proxy_port"] = PROXY_PORT
     data["proxy_timeout"] = PROXY_TIMEOUT
+    data["guardrails_enabled"] = bool(NEMO_GUARDRAILS_URL)
+    data["guardrails_fail_closed"] = NEMO_GUARDRAILS_FAIL_CLOSED
     data["proxy_ip"] = proxy_self_ip or "unknown"
     return jsonify(data)
 
@@ -1104,6 +1204,11 @@ if __name__ == '__main__':
         print(f"[PROXY] Ollama API Proxy starting on port {PROXY_PORT}", flush=True)
         print(f"[PROXY] Forwarding to: {OLLAMA_URL}", flush=True)
         print(f"[PROXY] Timeout: {PROXY_TIMEOUT}s", flush=True)
+        if NEMO_GUARDRAILS_URL:
+            print(f"[PROXY] Nemo Guardrails: enabled ({NEMO_GUARDRAILS_URL})", flush=True)
+            print(f"[PROXY] Nemo Guardrails timeout: {NEMO_GUARDRAILS_TIMEOUT}s (fail_closed={NEMO_GUARDRAILS_FAIL_CLOSED})", flush=True)
+        else:
+            print("[PROXY] Nemo Guardrails: disabled (set NEMO_GUARDRAILS_URL to enable)", flush=True)
         try:
             proxy_app.run(host='0.0.0.0', port=PROXY_PORT, debug=False, threaded=True)
         except Exception as e:

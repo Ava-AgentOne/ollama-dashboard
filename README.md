@@ -162,6 +162,11 @@ Alternatively, paste the template URL directly in Unraid:
 | `OLLAMA_URL` | `http://OLLAMA_IP:11434` | Full URL to your Ollama API endpoint |
 | `OLLAMA_CONTAINER` | `ollama-intel` | Docker container name for log parsing |
 | `POLL_INTERVAL` | `5` | How often to poll Ollama status (seconds) |
+| `PROXY_TIMEOUT` | `600` | Proxy upstream timeout to Ollama (seconds) |
+| `NEMO_GUARDRAILS_URL` | `` | Nemo Guardrails check endpoint; when set, every proxied request is checked before forwarding |
+| `NEMO_GUARDRAILS_TIMEOUT` | `15` | Timeout for guardrails pre-check request (seconds) |
+| `NEMO_GUARDRAILS_FAIL_CLOSED` | `true` | If `true`, block Ollama calls when guardrails is unavailable/errors |
+| `NEMO_GUARDRAILS_MAX_BODY` | `20000` | Max request body chars sent to guardrails for evaluation |
 | `DATA_DIR` | `/data` | Path for persistent history storage |
 
 ## 📁 Volume Mounts
