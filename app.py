@@ -41,6 +41,7 @@ NEMO_RAIL_INPUT = _env_bool('NEMO_RAIL_INPUT', True)
 NEMO_RAIL_OUTPUT = _env_bool('NEMO_RAIL_OUTPUT', False)
 NEMO_RAIL_DIALOG = _env_bool('NEMO_RAIL_DIALOG', False)
 NEMO_RAIL_RETRIEVAL = _env_bool('NEMO_RAIL_RETRIEVAL', False)
+NEMO_SKIP_BASE64 = _env_bool('NEMO_SKIP_BASE64', True)
 
 # Authentication — empty = no auth required
 DASHBOARD_PASSWORD = os.environ.get('DASHBOARD_PASSWORD', '')
@@ -422,10 +423,60 @@ def _guardrails_payload(method, req_path, client_ip, headers, body_json, body_by
         "headers": safe_headers,
     }
     if isinstance(body_json, dict):
-        payload["body"] = body_json
+        payload["body"] = _sanitize_for_guardrails(body_json)
     elif body_bytes:
-        payload["body_text"] = body_bytes.decode('utf-8', errors='replace')[:NEMO_GUARDRAILS_MAX_BODY]
+        payload["body_text"] = _sanitize_text_for_guardrails(
+            body_bytes.decode('utf-8', errors='replace')
+        )[:NEMO_GUARDRAILS_MAX_BODY]
     return payload
+
+
+def _looks_like_base64_blob(text):
+    if not text:
+        return False
+    compact = re.sub(r'\s+', '', text)
+    # Large opaque base64 blocks (images/files) are not useful for safety classification.
+    if len(compact) < 256:
+        return False
+    if len(compact) % 4 != 0:
+        return False
+    return bool(re.fullmatch(r'[A-Za-z0-9+/=]+', compact))
+
+
+def _sanitize_text_for_guardrails(text):
+    if not isinstance(text, str):
+        return text
+    if NEMO_SKIP_BASE64:
+        if text.startswith('data:') and ';base64,' in text:
+            return '[omitted:data-url-base64]'
+        if _looks_like_base64_blob(text):
+            compact = re.sub(r'\s+', '', text)
+            return f'[omitted:base64:{len(compact)} chars]'
+        # Replace any long base64-like spans inside larger text blobs.
+        text = re.sub(
+            r'(?<![A-Za-z0-9+/=])[A-Za-z0-9+/=]{256,}(?![A-Za-z0-9+/=])',
+            '[omitted:base64-span]',
+            text
+        )
+    return text
+
+
+def _sanitize_for_guardrails(obj):
+    if isinstance(obj, dict):
+        sanitized = {}
+        for k, v in obj.items():
+            key = str(k).lower()
+            # Common multimodal/image payload fields can be huge base64 arrays.
+            if NEMO_SKIP_BASE64 and key in ('images', 'image', 'file', 'files', 'audio', 'input_image'):
+                sanitized[k] = '[omitted:binary-field]'
+                continue
+            sanitized[k] = _sanitize_for_guardrails(v)
+        return sanitized
+    if isinstance(obj, list):
+        return [_sanitize_for_guardrails(v) for v in obj]
+    if isinstance(obj, str):
+        return _sanitize_text_for_guardrails(obj)
+    return obj
 
 
 def _guardrails_endpoint():
@@ -627,25 +678,39 @@ def proxy_forward(target_url, path):
             entry["output_text"] = output_text
         return entry
 
-    allowed, guardrails_reason = _guardrails_check(
-        method=method,
-        req_path=req_path,
-        client_ip=client_ip,
-        headers=fwd_headers,
-        body_json=body_json,
-        body_bytes=body
-    )
-    if not allowed:
-        model_name = body_json.get('model', '—') if isinstance(body_json, dict) else '—'
-        log_request(build_proxy_entry(
-            status_code=403,
-            model_name=model_name,
-            done_reason=f"GuardrailsBlocked: {guardrails_reason}"
-        ))
-        return jsonify({
-            "error": "blocked_by_guardrails",
-            "reason": guardrails_reason
-        }), 403
+    # Guardrails should gate only generation endpoints, not metadata/status routes.
+    is_guardrails_target = path in ('api/chat', 'api/generate') or path.startswith('v1/')
+    if is_guardrails_target:
+        allowed, guardrails_reason = _guardrails_check(
+            method=method,
+            req_path=req_path,
+            client_ip=client_ip,
+            headers=fwd_headers,
+            body_json=body_json,
+            body_bytes=body
+        )
+        if not allowed:
+            rejected_input = _extract_input_text(body_json, path)
+            if not rejected_input and body:
+                rejected_input = body.decode('utf-8', errors='replace')
+            rejected_input = _sanitize_text_for_guardrails(rejected_input)[:NEMO_GUARDRAILS_MAX_BODY]
+
+            model_name = body_json.get('model', '—') if isinstance(body_json, dict) else '—'
+            blocked_entry = build_proxy_entry(
+                status_code=403,
+                model_name=model_name,
+                done_reason=f"GuardrailsBlocked: {guardrails_reason}"
+            )
+            if rejected_input:
+                # Always persist rejected request input for forensic visibility.
+                blocked_entry["has_prompt"] = True
+                blocked_entry["input_text"] = rejected_input
+                blocked_entry["output_text"] = ""
+            log_request(blocked_entry)
+            return jsonify({
+                "error": "blocked_by_guardrails",
+                "reason": guardrails_reason
+            }), 403
 
     try:
         ollama_resp = requests.request(
@@ -1174,22 +1239,28 @@ def api_prompt(entry_id):
 def api_history_stats():
     with history_lock:
         history = load_history()
+        requests_list = history.get("requests", [])
         file_size = 0
         try:
             file_size = os.path.getsize(HISTORY_FILE)
         except:
             pass
         # Token stats from both proxied requests and benchmarks
-        req_gen_tokens = sum(r.get("tokens", 0) for r in history.get("requests", []))
-        req_prompt_tokens = sum(r.get("prompt_tokens", 0) for r in history.get("requests", []))
+        req_gen_tokens = sum(r.get("tokens", 0) for r in requests_list)
+        req_prompt_tokens = sum(r.get("prompt_tokens", 0) for r in requests_list)
         bench_gen_tokens = sum(b.get("eval_count", 0) for b in history.get("benchmarks", []))
         bench_prompt_tokens = sum(b.get("prompt_eval_count", 0) for b in history.get("benchmarks", []))
         total_gen = req_gen_tokens + bench_gen_tokens
         total_prompt = req_prompt_tokens + bench_prompt_tokens
-        proxied = sum(1 for r in history.get("requests", []) if r.get("source") == "proxy")
-        direct = sum(1 for r in history.get("requests", []) if r.get("source") == "direct")
+        proxied = sum(1 for r in requests_list if r.get("source") == "proxy")
+        direct = sum(1 for r in requests_list if r.get("source") == "direct")
+        errors = sum(1 for r in requests_list if int(r.get("status", 0) or 0) >= 400)
+        rejected = sum(
+            1 for r in requests_list
+            if int(r.get("status", 0) or 0) == 403 and "GuardrailsBlocked" in str(r.get("done_reason", ""))
+        )
         return jsonify({
-            "requests": len(history.get("requests", [])),
+            "requests": len(requests_list),
             "benchmarks": len(history.get("benchmarks", [])),
             "events": len(history.get("events", [])),
             "file_size_bytes": file_size,
@@ -1199,6 +1270,9 @@ def api_history_stats():
             "total_prompt_tokens": total_prompt,
             "proxied_requests": proxied,
             "direct_requests": direct,
+            "error_requests": errors,
+            "rejected_requests": rejected,
+            "successful_requests": len(requests_list) - errors,
         })
 
 # ── Update Checker ───────────────────────────────────────────────

@@ -173,6 +173,7 @@ Alternatively, paste the template URL directly in Unraid:
 | `NEMO_RAIL_OUTPUT` | `false` | Enable Nemo output rails (`guardrails.options.rails.output`) |
 | `NEMO_RAIL_DIALOG` | `false` | Enable Nemo dialog rails (`guardrails.options.rails.dialog`) |
 | `NEMO_RAIL_RETRIEVAL` | `false` | Enable Nemo retrieval rails (`guardrails.options.rails.retrieval`) |
+| `NEMO_SKIP_BASE64` | `true` | Strip/replace large base64 blobs before sending request context to guardrails |
 | `DATA_DIR` | `/data` | Path for persistent history storage |
 
 ## 📁 Volume Mounts
