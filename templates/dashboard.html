@@ -1640,9 +1640,17 @@ function renderModelsChart(canvas, emptyMsg, badge, data, c) {
 function renderHistory() {
   const filtered = filterEntries(allHistory.requests||[], currentFilter);
   const sorted = sortEntries(filtered);
+  const errorCount = sorted.filter(r => Number(r.status||0) >= 400).length;
+  const rejectedCount = sorted.filter(r =>
+    Number(r.status||0) === 403 && String(r.done_reason||'').includes('GuardrailsBlocked')
+  ).length;
 
   document.getElementById('totalReqs').textContent=sorted.length;
-  document.getElementById('totalReqsSub').textContent=sorted.length+' tracked';
+  if (errorCount > 0) {
+    document.getElementById('totalReqsSub').textContent=`${sorted.length} tracked · ${errorCount} errors · ${rejectedCount} rejected`;
+  } else {
+    document.getElementById('totalReqsSub').textContent=sorted.length+' tracked';
+  }
   document.getElementById('histBadge').textContent=sorted.length;
 
   // Filtered token totals
