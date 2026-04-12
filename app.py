@@ -31,6 +31,8 @@ NEMO_GUARDRAILS_URL = os.environ.get('NEMO_GUARDRAILS_URL', '').strip()
 NEMO_GUARDRAILS_TIMEOUT = int(os.environ.get('NEMO_GUARDRAILS_TIMEOUT', 15))
 NEMO_GUARDRAILS_FAIL_CLOSED = os.environ.get('NEMO_GUARDRAILS_FAIL_CLOSED', 'true').lower() in ('1', 'true', 'yes', 'on')
 NEMO_GUARDRAILS_MAX_BODY = int(os.environ.get('NEMO_GUARDRAILS_MAX_BODY', 20000))
+NEMO_GUARDRAILS_MODEL = os.environ.get('NEMO_GUARDRAILS_MODEL', 'gemma4:e4b').strip()
+NEMO_CONFIG_ID = os.environ.get('NEMO_CONFIG_ID', 'default-safe').strip()
 
 # Authentication — empty = no auth required
 DASHBOARD_PASSWORD = os.environ.get('DASHBOARD_PASSWORD', '')
@@ -418,16 +420,82 @@ def _guardrails_payload(method, req_path, client_ip, headers, body_json, body_by
     return payload
 
 
+def _guardrails_endpoint():
+    base = NEMO_GUARDRAILS_URL.rstrip('/')
+    if base.endswith('/v1/chat/completions'):
+        return base
+    return f"{base}/v1/chat/completions"
+
+
+def _extract_guardrails_text(method, req_path, body_json, body_bytes):
+    """Get a compact text snapshot of the incoming request for safety classification."""
+    text = _extract_input_text(body_json, req_path)
+    if text:
+        return text[:NEMO_GUARDRAILS_MAX_BODY]
+    if body_bytes:
+        return body_bytes.decode('utf-8', errors='replace')[:NEMO_GUARDRAILS_MAX_BODY]
+    return f"{method} {req_path}"
+
+
+def _extract_json_object(text):
+    """Parse first JSON object from plain text (supports fenced/plain JSON)."""
+    if not text:
+        return None
+    t = text.strip()
+    if t.startswith('```'):
+        t = t.strip('`')
+        if t.startswith('json'):
+            t = t[4:].strip()
+    try:
+        return json.loads(t)
+    except Exception:
+        pass
+
+    m = re.search(r'\{.*\}', t, re.DOTALL)
+    if not m:
+        return None
+    try:
+        return json.loads(m.group(0))
+    except Exception:
+        return None
+
+
 def _guardrails_check(method, req_path, client_ip, headers, body_json, body_bytes):
     """Run Nemo Guardrails check. Returns (allowed, reason)."""
     if not NEMO_GUARDRAILS_URL:
         return True, ''
 
-    payload = _guardrails_payload(method, req_path, client_ip, headers, body_json, body_bytes)
+    context_payload = _guardrails_payload(method, req_path, client_ip, headers, body_json, body_bytes)
+    user_text = _extract_guardrails_text(method, req_path, body_json, body_bytes)
+    endpoint = _guardrails_endpoint()
+    guardrails_payload = {
+        "model": NEMO_GUARDRAILS_MODEL,
+        "stream": False,
+        "temperature": 0,
+        "guardrails": {"config_id": NEMO_CONFIG_ID},
+        "messages": [
+            {
+                "role": "system",
+                "content": (
+                    "You are a strict safety gate for an LLM proxy. "
+                    "Return ONLY JSON with keys: allowed (boolean), reason (string). "
+                    "Set allowed=false if the request is unsafe, malicious, or policy-violating."
+                )
+            },
+            {
+                "role": "user",
+                "content": (
+                    f"Evaluate this request and respond with JSON only.\n"
+                    f"request_text:\n{user_text}\n\n"
+                    f"request_context_json:\n{json.dumps(context_payload, ensure_ascii=False)}"
+                )
+            }
+        ]
+    }
     try:
         resp = requests.post(
-            NEMO_GUARDRAILS_URL,
-            json=payload,
+            endpoint,
+            json=guardrails_payload,
             timeout=NEMO_GUARDRAILS_TIMEOUT
         )
         if not resp.ok:
@@ -442,6 +510,14 @@ def _guardrails_check(method, req_path, client_ip, headers, body_json, body_byte
             if NEMO_GUARDRAILS_FAIL_CLOSED:
                 return False, "Guardrails returned non-JSON response"
             return True, ''
+
+        # If the model returns OpenAI-style chat completion, extract JSON verdict from content.
+        if isinstance(data.get('choices'), list) and data.get('choices'):
+            msg = data['choices'][0].get('message', {})
+            content = msg.get('content', '') if isinstance(msg, dict) else ''
+            parsed = _extract_json_object(content)
+            if isinstance(parsed, dict):
+                data = parsed
 
         blocked = (
             data.get('allowed') is False or
