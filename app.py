@@ -27,12 +27,20 @@ PROMPTS_FILE = os.path.join(DATA_DIR, 'prompts.jsonl')
 POLL_INTERVAL = int(os.environ.get('POLL_INTERVAL', 5))
 PROXY_PORT = int(os.environ.get('PROXY_PORT', 11434))
 PROXY_TIMEOUT = int(os.environ.get('PROXY_TIMEOUT', 600))
+
+def _env_bool(name, default):
+    return os.environ.get(name, str(default)).strip().lower() in ('1', 'true', 'yes', 'on')
+
 NEMO_GUARDRAILS_URL = os.environ.get('NEMO_GUARDRAILS_URL', '').strip()
 NEMO_GUARDRAILS_TIMEOUT = int(os.environ.get('NEMO_GUARDRAILS_TIMEOUT', 15))
-NEMO_GUARDRAILS_FAIL_CLOSED = os.environ.get('NEMO_GUARDRAILS_FAIL_CLOSED', 'true').lower() in ('1', 'true', 'yes', 'on')
+NEMO_GUARDRAILS_FAIL_CLOSED = _env_bool('NEMO_GUARDRAILS_FAIL_CLOSED', True)
 NEMO_GUARDRAILS_MAX_BODY = int(os.environ.get('NEMO_GUARDRAILS_MAX_BODY', 20000))
 NEMO_GUARDRAILS_MODEL = os.environ.get('NEMO_GUARDRAILS_MODEL', 'gemma4:e4b').strip()
 NEMO_CONFIG_ID = os.environ.get('NEMO_CONFIG_ID', 'default-safe').strip()
+NEMO_RAIL_INPUT = _env_bool('NEMO_RAIL_INPUT', True)
+NEMO_RAIL_OUTPUT = _env_bool('NEMO_RAIL_OUTPUT', False)
+NEMO_RAIL_DIALOG = _env_bool('NEMO_RAIL_DIALOG', False)
+NEMO_RAIL_RETRIEVAL = _env_bool('NEMO_RAIL_RETRIEVAL', False)
 
 # Authentication — empty = no auth required
 DASHBOARD_PASSWORD = os.environ.get('DASHBOARD_PASSWORD', '')
@@ -472,7 +480,17 @@ def _guardrails_check(method, req_path, client_ip, headers, body_json, body_byte
         "model": NEMO_GUARDRAILS_MODEL,
         "stream": False,
         "temperature": 0,
-        "guardrails": {"config_id": NEMO_CONFIG_ID},
+        "guardrails": {
+            "config_id": NEMO_CONFIG_ID,
+            "options": {
+                "rails": {
+                    "input": NEMO_RAIL_INPUT,
+                    "output": NEMO_RAIL_OUTPUT,
+                    "dialog": NEMO_RAIL_DIALOG,
+                    "retrieval": NEMO_RAIL_RETRIEVAL
+                }
+            }
+        },
         "messages": [
             {
                 "role": "system",

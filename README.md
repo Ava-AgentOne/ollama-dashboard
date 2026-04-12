@@ -169,6 +169,10 @@ Alternatively, paste the template URL directly in Unraid:
 | `NEMO_GUARDRAILS_MAX_BODY` | `20000` | Max request body chars sent to guardrails for evaluation |
 | `NEMO_GUARDRAILS_MODEL` | `gemma4:e4b` | Model used for guardrails classification via `v1/chat/completions` |
 | `NEMO_CONFIG_ID` | `default-safe` | Nemo Guardrails config id sent as `guardrails.config_id` |
+| `NEMO_RAIL_INPUT` | `true` | Enable Nemo input rails (`guardrails.options.rails.input`) |
+| `NEMO_RAIL_OUTPUT` | `false` | Enable Nemo output rails (`guardrails.options.rails.output`) |
+| `NEMO_RAIL_DIALOG` | `false` | Enable Nemo dialog rails (`guardrails.options.rails.dialog`) |
+| `NEMO_RAIL_RETRIEVAL` | `false` | Enable Nemo retrieval rails (`guardrails.options.rails.retrieval`) |
 | `DATA_DIR` | `/data` | Path for persistent history storage |
 
 ## 📁 Volume Mounts
