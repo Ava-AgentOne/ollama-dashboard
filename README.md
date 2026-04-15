@@ -162,6 +162,18 @@ Alternatively, paste the template URL directly in Unraid:
 | `OLLAMA_URL` | `http://OLLAMA_IP:11434` | Full URL to your Ollama API endpoint |
 | `OLLAMA_CONTAINER` | `ollama-intel` | Docker container name for log parsing |
 | `POLL_INTERVAL` | `5` | How often to poll Ollama status (seconds) |
+| `PROXY_TIMEOUT` | `600` | Proxy upstream timeout to Ollama (seconds) |
+| `NEMO_GUARDRAILS_URL` | `` | Nemo Guardrails check endpoint; when set, every proxied request is checked before forwarding |
+| `NEMO_GUARDRAILS_TIMEOUT` | `15` | Timeout for guardrails pre-check request (seconds) |
+| `NEMO_GUARDRAILS_FAIL_CLOSED` | `true` | If `true`, block Ollama calls when guardrails is unavailable/errors |
+| `NEMO_GUARDRAILS_MAX_BODY` | `20000` | Max request body chars sent to guardrails for evaluation |
+| `NEMO_GUARDRAILS_MODEL` | `gemma4:e4b` | Model used for guardrails classification via `v1/chat/completions` |
+| `NEMO_CONFIG_ID` | `default-safe` | Nemo Guardrails config id sent as `guardrails.config_id` |
+| `NEMO_RAIL_INPUT` | `true` | Enable Nemo input rails (`guardrails.options.rails.input`) |
+| `NEMO_RAIL_OUTPUT` | `false` | Enable Nemo output rails (`guardrails.options.rails.output`) |
+| `NEMO_RAIL_DIALOG` | `false` | Enable Nemo dialog rails (`guardrails.options.rails.dialog`) |
+| `NEMO_RAIL_RETRIEVAL` | `false` | Enable Nemo retrieval rails (`guardrails.options.rails.retrieval`) |
+| `NEMO_SKIP_BASE64` | `true` | Strip/replace large base64 blobs before sending request context to guardrails |
 | `DATA_DIR` | `/data` | Path for persistent history storage |
 
 ## 📁 Volume Mounts
