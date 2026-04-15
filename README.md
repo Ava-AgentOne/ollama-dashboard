@@ -36,6 +36,9 @@ Designed as a companion to [ollama-intel](https://github.com/Ava-AgentOne/ollama
 | 📡 **Live Status** | Real-time model loading/unloading detection |
 | 📜 **Request History** | Tracks all API requests with model name, tokens, and duration |
 | 🔀 **API Proxy** | Transparent Ollama proxy (port 11434) — captures token stats from every request |
+| 🌐 **OpenAI-Compatible Tracking** | Tracks `/v1/` endpoints (OpenAI, Anthropic formats) with full token stats |
+| 🛡️ **Nemo Guardrails** | Optional safety gate — pre-check every request via NVIDIA Nemo Guardrails before forwarding |
+| 📝 **Prompt Logging** | Opt-in full input/output text logging for request forensics and debugging |
 | ⚡ **Benchmarking** | Run speed tests against any loaded model with detailed metrics |
 | 🎨 **6 Visual Themes** | 3 themes (Terminal, Cyberpunk, Ocean) × 2 modes (Dark/Light) |
 | 🔄 **Update Checker** | Monitors Python package versions and base image status |
@@ -58,15 +61,15 @@ The dashboard ships with **3 themes**, each with dark and light modes:
 ### Docker Run (Standard Bridge)
 
 ```bash
-docker run -d \
-  --name ollama-dashboard \
-  --restart unless-stopped \
-  -p 8088:8088 \
-  -v /mnt/user/appdata/ollama-dashboard:/data \
-  -v /var/run/docker.sock:/var/run/docker.sock:ro \
-  -e OLLAMA_URL=http://<OLLAMA_IP>:11434 \
-  -e OLLAMA_CONTAINER=ollama-intel \
-  -e POLL_INTERVAL=5 \
+docker run -d \\
+  --name ollama-dashboard \\
+  --restart unless-stopped \\
+  -p 8088:8088 \\
+  -v /mnt/user/appdata/ollama-dashboard:/data \\
+  -v /var/run/docker.sock:/var/run/docker.sock:ro \\
+  -e OLLAMA_URL=http://<OLLAMA_IP>:11434 \\
+  -e OLLAMA_CONTAINER=ollama-intel \\
+  -e POLL_INTERVAL=5 \\
   ghcr.io/ava-agentone/ollama-dashboard:latest
 ```
 
@@ -77,16 +80,16 @@ docker run -d \
 If you prefer the container to have its own IP on your LAN (common on Unraid):
 
 ```bash
-docker run -d \
-  --name ollama-dashboard \
-  --restart unless-stopped \
-  --network br0 \
-  --ip <YOUR_IP> \
-  -v /mnt/user/appdata/ollama-dashboard:/data \
-  -v /var/run/docker.sock:/var/run/docker.sock:ro \
-  -e OLLAMA_URL=http://<OLLAMA_IP>:11434 \
-  -e OLLAMA_CONTAINER=ollama-intel \
-  -e POLL_INTERVAL=5 \
+docker run -d \\
+  --name ollama-dashboard \\
+  --restart unless-stopped \\
+  --network br0 \\
+  --ip <YOUR_IP> \\
+  -v /mnt/user/appdata/ollama-dashboard:/data \\
+  -v /var/run/docker.sock:/var/run/docker.sock:ro \\
+  -e OLLAMA_URL=http://<OLLAMA_IP>:11434 \\
+  -e OLLAMA_CONTAINER=ollama-intel \\
+  -e POLL_INTERVAL=5 \\
   ghcr.io/ava-agentone/ollama-dashboard:latest
 ```
 
@@ -110,6 +113,18 @@ Ollama (ollama-ip:11434)
 Dashboard captures: model, tokens, duration, tok/s
 ```
 
+### Supported API Formats
+
+The proxy tracks requests across multiple API formats:
+
+| API Format | Endpoints | Token Stats |
+|------------|-----------|-------------|
+| **Ollama Native** | `/api/chat`, `/api/generate` | ✅ Full (eval_count, eval_duration) |
+| **OpenAI Compatible** | `/v1/chat/completions`, `/v1/completions` | ✅ Via usage block |
+| **Anthropic Compatible** | `/v1/messages` | ✅ Via usage block |
+
+All formats support both streaming and non-streaming responses.
+
 ### Setup
 
 In your client (Open WebUI, agent, etc.), change the Ollama URL:
@@ -129,6 +144,47 @@ The proxy is 100% transparent — same API, same responses. Clients won't notice
 
 Requests that bypass the proxy still appear in history (from Docker log parsing) but without token counts.
 
+## 🛡️ Nemo Guardrails (Optional)
+
+The proxy can optionally gate every generation request through [NVIDIA Nemo Guardrails](https://github.com/NVIDIA/NeMo-Guardrails) before forwarding to Ollama. This provides a safety layer that can block harmful, malicious, or policy-violating prompts.
+
+### How It Works
+
+1. Client sends a request to the proxy
+2. Proxy extracts the input text and sends it to the Nemo Guardrails endpoint for classification
+3. If the request is **allowed**, it's forwarded to Ollama as normal
+4. If the request is **blocked**, the proxy returns a `403` response and logs the rejection
+
+### Setup
+
+Set `NEMO_GUARDRAILS_URL` to your Nemo Guardrails service endpoint:
+
+```bash
+-e NEMO_GUARDRAILS_URL=http://<NEMO_IP>:8080
+```
+
+When the URL is empty (default), guardrails are disabled and the proxy behaves normally.
+
+### Fail-Closed Mode
+
+By default, `NEMO_GUARDRAILS_FAIL_CLOSED=true` — if the guardrails service is unreachable or returns an error, the proxy will **block** the request. Set to `false` to allow requests through when guardrails are unavailable.
+
+### What Gets Checked
+
+Only generation endpoints are checked (`/api/chat`, `/api/generate`, `/v1/*`). Metadata routes like `/api/tags` and health checks pass through without a guardrails check.
+
+Sensitive headers (Authorization, Cookie) are stripped before sending context to the guardrails service. Large base64 blobs (images, files) are replaced with placeholders to keep payloads compact.
+
+## 📝 Prompt Logging (Optional)
+
+Enable **prompt logging** to store the full input and output text of every proxied request. This is useful for debugging, auditing, or reviewing what your models are being asked.
+
+### Setup
+
+Toggle **"Log prompts & responses"** in **Settings → Logging** within the dashboard. When enabled, prompt data is stored in a separate `prompts.jsonl` file (append-only) and can be viewed by clicking any request row in the history table.
+
+> ⚠️ **Privacy Note**: When enabled, full prompt text is stored **unencrypted** on disk. If your dashboard data volume is shared or accessible to others, be mindful of sensitive content in prompts.
+
 ### Unraid Private Apps (Recommended)
 
 Add all Ava-AgentOne containers to your Unraid **Apps** tab:
@@ -136,7 +192,7 @@ Add all Ava-AgentOne containers to your Unraid **Apps** tab:
 1. Run in your Unraid terminal:
    ```bash
    mkdir -p /boot/config/plugins/community.applications/private/Ava-AgentOne
-   curl -o /boot/config/plugins/community.applications/private/Ava-AgentOne/ollama-dashboard.xml \
+   curl -o /boot/config/plugins/community.applications/private/Ava-AgentOne/ollama-dashboard.xml \\
      https://raw.githubusercontent.com/Ava-AgentOne/unraid-templates/main/ollama-dashboard.xml
    ```
 2. Go to **Apps** tab → **Private Apps** in the left sidebar
@@ -163,6 +219,12 @@ Alternatively, paste the template URL directly in Unraid:
 | `OLLAMA_CONTAINER` | `ollama-intel` | Docker container name for log parsing |
 | `POLL_INTERVAL` | `5` | How often to poll Ollama status (seconds) |
 | `PROXY_TIMEOUT` | `600` | Proxy upstream timeout to Ollama (seconds) |
+| `DATA_DIR` | `/data` | Path for persistent history storage |
+
+### Nemo Guardrails Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
 | `NEMO_GUARDRAILS_URL` | `` | Nemo Guardrails check endpoint; when set, every proxied request is checked before forwarding |
 | `NEMO_GUARDRAILS_TIMEOUT` | `15` | Timeout for guardrails pre-check request (seconds) |
 | `NEMO_GUARDRAILS_FAIL_CLOSED` | `true` | If `true`, block Ollama calls when guardrails is unavailable/errors |
@@ -174,19 +236,18 @@ Alternatively, paste the template URL directly in Unraid:
 | `NEMO_RAIL_DIALOG` | `false` | Enable Nemo dialog rails (`guardrails.options.rails.dialog`) |
 | `NEMO_RAIL_RETRIEVAL` | `false` | Enable Nemo retrieval rails (`guardrails.options.rails.retrieval`) |
 | `NEMO_SKIP_BASE64` | `true` | Strip/replace large base64 blobs before sending request context to guardrails |
-| `DATA_DIR` | `/data` | Path for persistent history storage |
 
 ## 📁 Volume Mounts
 
 | Host Path | Container Path | Mode | Purpose |
-|-----------|---------------|------|---------|
+|-----------|---------------|------|----------|
 | `/mnt/user/appdata/ollama-dashboard` | `/data` | rw | Persistent history & benchmark data |
 | `/var/run/docker.sock` | `/var/run/docker.sock` | ro | Read Ollama container logs (read-only) |
 
 ## 🏗️ Tech Stack
 
 | Component | Technology |
-|-----------|-----------|
+|-----------|------------|
 | **Backend** | Python 3.11, Flask |
 | **Frontend** | Jinja2 Templates, Vanilla JS |
 | **Charts** | Chart.js |
@@ -198,13 +259,14 @@ Alternatively, paste the template URL directly in Unraid:
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/` | GET | Dashboard web interface |
-| `/api/status` | GET | Current Ollama status (models, running state) |
+| `/api/status` | GET | Current Ollama status (models, running state, guardrails info) |
 | `/api/history` | GET | Full request/benchmark/event history |
 | `/api/benchmark` | POST | Run a benchmark against a model |
-| `/api/history/stats` | GET | History statistics (counts, token totals) |
+| `/api/history/stats` | GET | History statistics (counts, token totals, error/rejected counts) |
 | `/api/history/export` | GET | Download history as JSON file |
+| `/api/prompt/<entry_id>` | GET | Retrieve prompt input/output text for a specific request |
 | `/api/trim` | POST | Trim old history entries |
-| `/api/clear` | POST | Clear all history |
+| `/api/clear` | POST | Clear all history (including prompt logs) |
 | `/api/updates` | GET | Check for package and image updates |
 
 ## 🔌 Companion Projects
@@ -236,6 +298,15 @@ Alternatively, paste the template URL directly in Unraid:
 <summary><strong>Changes not showing after update</strong></summary>
 
 Hard refresh your browser: **Ctrl+Shift+R** (or **Cmd+Shift+R** on Mac) to bypass the browser cache.
+</details>
+
+<details>
+<summary><strong>Guardrails blocking everything</strong></summary>
+
+- Check that your Nemo Guardrails service is running and reachable
+- If `NEMO_GUARDRAILS_FAIL_CLOSED=true` (default), requests will be blocked when guardrails is unavailable
+- Review the dashboard request history — blocked requests show with status `403` and reason `GuardrailsBlocked`
+- Try setting `NEMO_GUARDRAILS_FAIL_CLOSED=false` temporarily to verify Ollama connectivity
 </details>
 
 ## 📜 License
