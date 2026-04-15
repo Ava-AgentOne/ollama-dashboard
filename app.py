@@ -23,8 +23,25 @@ OLLAMA_URL = os.environ.get('OLLAMA_URL', 'http://localhost:11434')
 OLLAMA_CONTAINER = os.environ.get('OLLAMA_CONTAINER', 'ollama-intel')
 DATA_DIR = os.environ.get('DATA_DIR', '/data')
 HISTORY_FILE = os.path.join(DATA_DIR, 'history.json')
+PROMPTS_FILE = os.path.join(DATA_DIR, 'prompts.jsonl')
 POLL_INTERVAL = int(os.environ.get('POLL_INTERVAL', 5))
 PROXY_PORT = int(os.environ.get('PROXY_PORT', 11434))
+PROXY_TIMEOUT = int(os.environ.get('PROXY_TIMEOUT', 600))
+
+def _env_bool(name, default):
+    return os.environ.get(name, str(default)).strip().lower() in ('1', 'true', 'yes', 'on')
+
+NEMO_GUARDRAILS_URL = os.environ.get('NEMO_GUARDRAILS_URL', '').strip()
+NEMO_GUARDRAILS_TIMEOUT = int(os.environ.get('NEMO_GUARDRAILS_TIMEOUT', 15))
+NEMO_GUARDRAILS_FAIL_CLOSED = _env_bool('NEMO_GUARDRAILS_FAIL_CLOSED', True)
+NEMO_GUARDRAILS_MAX_BODY = int(os.environ.get('NEMO_GUARDRAILS_MAX_BODY', 20000))
+NEMO_GUARDRAILS_MODEL = os.environ.get('NEMO_GUARDRAILS_MODEL', 'gemma4:e4b').strip()
+NEMO_CONFIG_ID = os.environ.get('NEMO_CONFIG_ID', 'default-safe').strip()
+NEMO_RAIL_INPUT = _env_bool('NEMO_RAIL_INPUT', True)
+NEMO_RAIL_OUTPUT = _env_bool('NEMO_RAIL_OUTPUT', False)
+NEMO_RAIL_DIALOG = _env_bool('NEMO_RAIL_DIALOG', False)
+NEMO_RAIL_RETRIEVAL = _env_bool('NEMO_RAIL_RETRIEVAL', False)
+NEMO_SKIP_BASE64 = _env_bool('NEMO_SKIP_BASE64', True)
 
 # Authentication — empty = no auth required
 DASHBOARD_PASSWORD = os.environ.get('DASHBOARD_PASSWORD', '')
@@ -110,12 +127,36 @@ def save_history(data):
     with open(HISTORY_FILE, 'w') as f:
         json.dump(data, f, indent=2, default=str)
 
+def _append_prompt(prompt_entry):
+    """Append a prompt record to the JSONL file (append-only, no full rewrite)."""
+    try:
+        os.makedirs(DATA_DIR, exist_ok=True)
+        with open(PROMPTS_FILE, 'a') as f:
+            f.write(json.dumps(prompt_entry, default=str) + '\n')
+    except Exception as e:
+        print(f"[PROMPTS] Write error: {e}")
+
+
 def log_request(entry):
     """Thread-safe append to request history"""
+    # Extract prompt data before saving to history
+    input_text = entry.pop('input_text', '')
+    output_text = entry.pop('output_text', '')
+
     with history_lock:
         history = load_history()
         history["requests"].append(entry)
         save_history(history)
+
+    # Append prompt data to separate JSONL file (outside lock, append-only)
+    if input_text or output_text:
+        _append_prompt({
+            "id": entry.get("id", ""),
+            "time": entry.get("time", ""),
+            "model": entry.get("model", ""),
+            "input_text": input_text,
+            "output_text": output_text,
+        })
 
 # ── Request tracking from Docker logs (GIN lines only) ───────────
 last_log_ts = time.time()
@@ -260,55 +301,428 @@ def _fmt_duration(ms):
     s = int(round(s % 60))
     return f"{m}m{s}s"
 
+def parse_token_stats(data, path):
+    """Parse token stats from response data, handling both Ollama and OpenAI formats.
+
+    Ollama native: eval_count, prompt_eval_count, eval_duration, prompt_eval_duration
+    OpenAI compat: usage.completion_tokens, usage.prompt_tokens (no duration info)
+    """
+    eval_tokens = 0
+    prompt_tokens = 0
+    eval_dur = 0
+    prompt_dur = 0
+    done_reason = ""
+
+    # Check if this is a streaming done response (Ollama format)
+    if data.get('done'):
+        eval_tokens = data.get('eval_count', 0)
+        prompt_tokens = data.get('prompt_eval_count', 0)
+        eval_dur = data.get('eval_duration', 0)
+        prompt_dur = data.get('prompt_eval_duration', 0)
+        done_reason = data.get('done_reason', '')
+    # Check for OpenAI-compatible usage block
+    elif 'usage' in data:
+        usage = data.get('usage', {})
+        eval_tokens = usage.get('completion_tokens', usage.get('output_tokens', 0))
+        prompt_tokens = usage.get('prompt_tokens', usage.get('input_tokens', 0))
+        done_reason = data.get('finish_reason', '')
+    # Anthropic-style message_start can nest usage under message.usage
+    elif isinstance(data.get('message'), dict) and isinstance(data['message'].get('usage'), dict):
+        usage = data['message']['usage']
+        eval_tokens = usage.get('output_tokens', usage.get('completion_tokens', 0))
+        prompt_tokens = usage.get('input_tokens', usage.get('prompt_tokens', 0))
+        done_reason = data.get('stop_reason', data.get('type', ''))
+    # Anthropic-style message_delta can include usage at top level
+    elif data.get('type') == 'message_delta' and isinstance(data.get('usage'), dict):
+        usage = data.get('usage', {})
+        eval_tokens = usage.get('output_tokens', usage.get('completion_tokens', 0))
+        prompt_tokens = usage.get('input_tokens', usage.get('prompt_tokens', 0))
+        done_reason = data.get('delta', {}).get('stop_reason', '')
+    # Fallback: direct field lookup
+    else:
+        eval_tokens = data.get('eval_count', data.get('output_tokens', 0))
+        prompt_tokens = data.get('prompt_eval_count', data.get('input_tokens', 0))
+        done_reason = data.get('done_reason', data.get('finish_reason', ''))
+
+    return eval_tokens, prompt_tokens, eval_dur, prompt_dur, done_reason
+
+
 # ══════════════════════════════════════════════════════════════════
 #  OLLAMA API PROXY — runs on port 11434
 #  Forwards all requests to Ollama, captures token stats
 # ══════════════════════════════════════════════════════════════════
 
-@proxy_app.route('/', defaults={'path': ''}, methods=['GET', 'POST', 'PUT', 'DELETE', 'PATCH'])
-@proxy_app.route('/<path:path>', methods=['GET', 'POST', 'PUT', 'DELETE', 'PATCH'])
-def proxy_handler(path):
-    """Transparent proxy: forward to Ollama, capture token stats from responses."""
-    target_url = f"{OLLAMA_URL}/{path}"
+def _extract_input_text(body_json, path):
+    """Extract human-readable input text from a request body."""
+    if not isinstance(body_json, dict):
+        return ''
+    # Ollama /api/chat
+    msgs = body_json.get('messages')
+    if isinstance(msgs, list):
+        parts = []
+        for m in msgs:
+            role = m.get('role', '')
+            content = m.get('content', '')
+            if content:
+                parts.append(f"[{role}] {content}")
+        return '\n'.join(parts)
+    # Ollama /api/generate
+    prompt = body_json.get('prompt')
+    if prompt:
+        return prompt
+    return ''
+
+
+def _extract_output_text_streaming(accumulated_bytes, path):
+    """Extract output text from accumulated streaming response bytes."""
+    lines = accumulated_bytes.decode('utf-8', errors='replace').strip().split('\n')
+    content_parts = []
+    for line in lines:
+        raw = line.strip()
+        if raw.startswith('data:'):
+            raw = raw[5:].strip()
+        if not raw or raw == '[DONE]':
+            continue
+        try:
+            data = json.loads(raw)
+        except:
+            continue
+        # Ollama native: response (generate) or message.content (chat)
+        c = data.get('response', '')
+        if not c:
+            msg = data.get('message')
+            if isinstance(msg, dict):
+                c = msg.get('content', '')
+        # OpenAI compat: choices[0].delta.content
+        if not c:
+            choices = data.get('choices')
+            if isinstance(choices, list) and choices:
+                c = choices[0].get('delta', {}).get('content', '')
+        # Anthropic compat: content_block_delta -> delta.text
+        if not c:
+            if data.get('type') == 'content_block_delta':
+                c = data.get('delta', {}).get('text', '')
+        if c:
+            content_parts.append(c)
+    return ''.join(content_parts)
+
+
+def _guardrails_payload(method, req_path, client_ip, headers, body_json, body_bytes):
+    """Build a compact payload for Nemo Guardrails pre-check."""
+    safe_headers = {}
+    for k, v in headers.items():
+        lk = k.lower()
+        if lk in ('authorization', 'cookie', 'set-cookie'):
+            continue
+        safe_headers[k] = v
+
+    payload = {
+        "method": method,
+        "path": req_path,
+        "client_ip": client_ip,
+        "headers": safe_headers,
+    }
+    if isinstance(body_json, dict):
+        payload["body"] = _sanitize_for_guardrails(body_json)
+    elif body_bytes:
+        payload["body_text"] = _sanitize_text_for_guardrails(
+            body_bytes.decode('utf-8', errors='replace')
+        )[:NEMO_GUARDRAILS_MAX_BODY]
+    return payload
+
+
+def _looks_like_base64_blob(text):
+    if not text:
+        return False
+    compact = re.sub(r'\s+', '', text)
+    # Large opaque base64 blocks (images/files) are not useful for safety classification.
+    if len(compact) < 256:
+        return False
+    if len(compact) % 4 != 0:
+        return False
+    return bool(re.fullmatch(r'[A-Za-z0-9+/=]+', compact))
+
+
+def _sanitize_text_for_guardrails(text):
+    if not isinstance(text, str):
+        return text
+    if NEMO_SKIP_BASE64:
+        if text.startswith('data:') and ';base64,' in text:
+            return '[omitted:data-url-base64]'
+        if _looks_like_base64_blob(text):
+            compact = re.sub(r'\s+', '', text)
+            return f'[omitted:base64:{len(compact)} chars]'
+        # Replace any long base64-like spans inside larger text blobs.
+        text = re.sub(
+            r'(?<![A-Za-z0-9+/=])[A-Za-z0-9+/=]{256,}(?![A-Za-z0-9+/=])',
+            '[omitted:base64-span]',
+            text
+        )
+    return text
+
+
+def _sanitize_for_guardrails(obj):
+    if isinstance(obj, dict):
+        sanitized = {}
+        for k, v in obj.items():
+            key = str(k).lower()
+            # Common multimodal/image payload fields can be huge base64 arrays.
+            if NEMO_SKIP_BASE64 and key in ('images', 'image', 'file', 'files', 'audio', 'input_image'):
+                sanitized[k] = '[omitted:binary-field]'
+                continue
+            sanitized[k] = _sanitize_for_guardrails(v)
+        return sanitized
+    if isinstance(obj, list):
+        return [_sanitize_for_guardrails(v) for v in obj]
+    if isinstance(obj, str):
+        return _sanitize_text_for_guardrails(obj)
+    return obj
+
+
+def _guardrails_endpoint():
+    base = NEMO_GUARDRAILS_URL.rstrip('/')
+    if base.endswith('/v1/chat/completions'):
+        return base
+    return f"{base}/v1/chat/completions"
+
+
+def _extract_guardrails_text(method, req_path, body_json, body_bytes):
+    """Get a compact text snapshot of the incoming request for safety classification."""
+    text = _extract_input_text(body_json, req_path)
+    if text:
+        return text[:NEMO_GUARDRAILS_MAX_BODY]
+    if body_bytes:
+        return body_bytes.decode('utf-8', errors='replace')[:NEMO_GUARDRAILS_MAX_BODY]
+    return f"{method} {req_path}"
+
+
+def _extract_json_object(text):
+    """Parse first JSON object from plain text (supports fenced/plain JSON)."""
+    if not text:
+        return None
+    t = text.strip()
+    if t.startswith('```'):
+        t = t.strip('`')
+        if t.startswith('json'):
+            t = t[4:].strip()
+    try:
+        return json.loads(t)
+    except Exception:
+        pass
+
+    m = re.search(r'\{.*\}', t, re.DOTALL)
+    if not m:
+        return None
+    try:
+        return json.loads(m.group(0))
+    except Exception:
+        return None
+
+
+def _guardrails_check(method, req_path, client_ip, headers, body_json, body_bytes):
+    """Run Nemo Guardrails check. Returns (allowed, reason)."""
+    if not NEMO_GUARDRAILS_URL:
+        return True, ''
+
+    context_payload = _guardrails_payload(method, req_path, client_ip, headers, body_json, body_bytes)
+    user_text = _extract_guardrails_text(method, req_path, body_json, body_bytes)
+    endpoint = _guardrails_endpoint()
+    guardrails_payload = {
+        "model": NEMO_GUARDRAILS_MODEL,
+        "stream": False,
+        "temperature": 0,
+        "guardrails": {
+            "config_id": NEMO_CONFIG_ID,
+            "options": {
+                "rails": {
+                    "input": NEMO_RAIL_INPUT,
+                    "output": NEMO_RAIL_OUTPUT,
+                    "dialog": NEMO_RAIL_DIALOG,
+                    "retrieval": NEMO_RAIL_RETRIEVAL
+                }
+            }
+        },
+        "messages": [
+            {
+                "role": "system",
+                "content": (
+                    "You are a strict safety gate for an LLM proxy. "
+                    "Return ONLY JSON with keys: allowed (boolean), reason (string). "
+                    "Set allowed=false if the request is unsafe, malicious, or policy-violating."
+                )
+            },
+            {
+                "role": "user",
+                "content": (
+                    f"Evaluate this request and respond with JSON only.\n"
+                    f"request_text:\n{user_text}\n\n"
+                    f"request_context_json:\n{json.dumps(context_payload, ensure_ascii=False)}"
+                )
+            }
+        ]
+    }
+    try:
+        resp = requests.post(
+            endpoint,
+            json=guardrails_payload,
+            timeout=NEMO_GUARDRAILS_TIMEOUT
+        )
+        if not resp.ok:
+            if NEMO_GUARDRAILS_FAIL_CLOSED:
+                return False, f"Guardrails service error ({resp.status_code})"
+            return True, ''
+
+        data = {}
+        try:
+            data = resp.json() if resp.content else {}
+        except Exception:
+            if NEMO_GUARDRAILS_FAIL_CLOSED:
+                return False, "Guardrails returned non-JSON response"
+            return True, ''
+
+        # If the model returns OpenAI-style chat completion, extract JSON verdict from content.
+        if isinstance(data.get('choices'), list) and data.get('choices'):
+            msg = data['choices'][0].get('message', {})
+            content = msg.get('content', '') if isinstance(msg, dict) else ''
+            parsed = _extract_json_object(content)
+            if isinstance(parsed, dict):
+                data = parsed
+
+        blocked = (
+            data.get('allowed') is False or
+            data.get('blocked') is True or
+            data.get('safe') is False or
+            str(data.get('action', '')).lower() in ('block', 'deny', 'reject') or
+            str(data.get('verdict', '')).lower() in ('block', 'deny', 'reject', 'unsafe')
+        )
+        if blocked:
+            reason = (
+                data.get('reason') or
+                data.get('message') or
+                data.get('verdict') or
+                'Flagged by Nemo Guardrails'
+            )
+            return False, str(reason)
+
+        return True, ''
+    except requests.exceptions.Timeout:
+        if NEMO_GUARDRAILS_FAIL_CLOSED:
+            return False, "Guardrails check timed out"
+        return True, ''
+    except Exception as e:
+        if NEMO_GUARDRAILS_FAIL_CLOSED:
+            return False, f"Guardrails check failed: {str(e)}"
+        return True, ''
+
+def proxy_forward(target_url, path):
+    """Forward request to Ollama (common code for proxy handler)."""
     client_ip = flask_request.remote_addr or "unknown"
     method = flask_request.method
     start_ts = time.time()
 
-    # Forward headers (skip hop-by-hop)
     skip_headers = {'host', 'transfer-encoding', 'connection'}
     fwd_headers = {k: v for k, v in flask_request.headers if k.lower() not in skip_headers}
 
-    # Determine if this is a chat/generate request we should track
-    is_trackable = path in ('api/chat', 'api/generate')
+    is_trackable = path in ('api/chat', 'api/generate') or path.startswith('v1/')
 
-    # Get request body
     body = flask_request.get_data()
     body_json = None
-    is_streaming = True  # Ollama defaults to streaming
+    is_streaming = True
 
-    if body and is_trackable:
+    if body:
         try:
             body_json = json.loads(body)
             is_streaming = body_json.get('stream', True)
+            # Inject stream_options.include_usage for OpenAI-compatible streaming
+            # so Ollama emits a final chunk with token usage stats.
+            if is_streaming and path.startswith('v1/'):
+                so = body_json.setdefault('stream_options', {})
+                if not so.get('include_usage'):
+                    so['include_usage'] = True
+                    body = json.dumps(body_json).encode()
         except:
             pass
 
-    # Capture path now (request context won't be available inside generators)
-    req_path = f"/{path}"
+    req_path = flask_request.full_path.rstrip('?')
+
+    log_prompts = load_settings().get('log_prompts', False)
+
+    def build_proxy_entry(status_code, model_name='—', tokens=0, prompt_tokens=0,
+                          tokens_per_sec=0, prompt_tok_per_sec=0, done_reason='',
+                          input_text='', output_text=''):
+        elapsed_ms = (time.time() - start_ts) * 1000
+        now = datetime.now()
+        entry_id = secrets.token_hex(8)
+        entry = {
+            "id": entry_id,
+            "time": now.isoformat(),
+            "time_display": now.strftime("%Y/%m/%d - %H:%M:%S"),
+            "status": status_code,
+            "duration": _fmt_duration(elapsed_ms),
+            "duration_ms": round(elapsed_ms, 1),
+            "client_ip": client_ip,
+            "method": method,
+            "path": req_path,
+            "model": model_name,
+            "tokens": tokens,
+            "prompt_tokens": prompt_tokens,
+            "total_tokens": tokens + prompt_tokens,
+            "tokens_per_sec": tokens_per_sec,
+            "prompt_tok_per_sec": prompt_tok_per_sec,
+            "done_reason": done_reason,
+            "source": "proxy",
+        }
+        if log_prompts:
+            entry["has_prompt"] = True
+            entry["input_text"] = input_text
+            entry["output_text"] = output_text
+        return entry
+
+    # Guardrails should gate only generation endpoints, not metadata/status routes.
+    is_guardrails_target = path in ('api/chat', 'api/generate') or path.startswith('v1/')
+    if is_guardrails_target:
+        allowed, guardrails_reason = _guardrails_check(
+            method=method,
+            req_path=req_path,
+            client_ip=client_ip,
+            headers=fwd_headers,
+            body_json=body_json,
+            body_bytes=body
+        )
+        if not allowed:
+            rejected_input = _extract_input_text(body_json, path)
+            if not rejected_input and body:
+                rejected_input = body.decode('utf-8', errors='replace')
+            rejected_input = _sanitize_text_for_guardrails(rejected_input)[:NEMO_GUARDRAILS_MAX_BODY]
+
+            model_name = body_json.get('model', '—') if isinstance(body_json, dict) else '—'
+            blocked_entry = build_proxy_entry(
+                status_code=403,
+                model_name=model_name,
+                done_reason=f"GuardrailsBlocked: {guardrails_reason}"
+            )
+            if rejected_input:
+                # Always persist rejected request input for forensic visibility.
+                blocked_entry["has_prompt"] = True
+                blocked_entry["input_text"] = rejected_input
+                blocked_entry["output_text"] = ""
+            log_request(blocked_entry)
+            return jsonify({
+                "error": "blocked_by_guardrails",
+                "reason": guardrails_reason
+            }), 403
 
     try:
-        # Forward the request to Ollama
         ollama_resp = requests.request(
             method=method,
             url=target_url,
             headers=fwd_headers,
             data=body,
             stream=True,
-            timeout=600
+            timeout=PROXY_TIMEOUT
         )
 
         if is_trackable and is_streaming:
-            # ── Streaming: raw byte passthrough, parse stats after ──
             def stream_and_capture():
                 accumulated = b''
                 for chunk in ollama_resp.iter_content(chunk_size=None):
@@ -316,9 +730,7 @@ def proxy_handler(path):
                         yield chunk
                         accumulated += chunk
 
-                # Parse accumulated NDJSON for final stats
                 model_name = body_json.get('model', '—') if body_json else '—'
-                elapsed_ms = (time.time() - start_ts) * 1000
                 eval_tokens = 0
                 prompt_tokens = 0
                 tok_per_sec = 0
@@ -329,53 +741,68 @@ def proxy_handler(path):
                     lines = accumulated.decode('utf-8', errors='replace').strip().split('\n')
                     for line in reversed(lines):
                         try:
-                            data = json.loads(line)
+                            raw_line = line.strip()
+                            if not raw_line:
+                                continue
+                            # SSE streams use "data: {json}" lines and can include control frames.
+                            if raw_line.startswith('data:'):
+                                raw_line = raw_line[5:].strip()
+                            if not raw_line or raw_line == '[DONE]':
+                                continue
+
+                            data = json.loads(raw_line)
+                            parsed_eval, parsed_prompt, eval_dur, prompt_dur, parsed_done_reason = parse_token_stats(data, path)
+                            # Keep non-zero stats discovered anywhere in the stream.
+                            if parsed_eval > 0:
+                                eval_tokens = parsed_eval
+                            if parsed_prompt > 0:
+                                prompt_tokens = parsed_prompt
+                            if eval_dur > 0:
+                                tok_per_sec = round(parsed_eval / max(eval_dur / 1e9, 0.001), 2)
+                            if prompt_dur > 0:
+                                prompt_tok_per_sec = round(parsed_prompt / max(prompt_dur / 1e9, 0.001), 2)
+                            if parsed_done_reason:
+                                done_reason = parsed_done_reason
+                            model_name = data.get('model', model_name)
                             if data.get('done'):
-                                eval_tokens = data.get('eval_count', 0)
-                                prompt_tokens = data.get('prompt_eval_count', 0)
-                                eval_dur = data.get('eval_duration', 0)
-                                prompt_dur = data.get('prompt_eval_duration', 0)
-                                done_reason = data.get('done_reason', '')
-                                if eval_dur > 0:
-                                    tok_per_sec = round(eval_tokens / max(eval_dur / 1e9, 0.001), 2)
-                                if prompt_dur > 0:
-                                    prompt_tok_per_sec = round(prompt_tokens / max(prompt_dur / 1e9, 0.001), 2)
-                                model_name = data.get('model', model_name)
                                 break
                         except:
                             continue
                 except:
                     pass
 
-                entry = {
-                    "time": datetime.now().isoformat(),
-                    "time_display": datetime.now().strftime("%Y/%m/%d - %H:%M:%S"),
-                    "status": ollama_resp.status_code,
-                    "duration": _fmt_duration(elapsed_ms),
-                    "duration_ms": round(elapsed_ms, 1),
-                    "client_ip": client_ip,
-                    "method": method,
-                    "path": req_path,
-                    "model": model_name,
-                    "tokens": eval_tokens,
-                    "prompt_tokens": prompt_tokens,
-                    "total_tokens": eval_tokens + prompt_tokens,
-                    "tokens_per_sec": tok_per_sec,
-                    "prompt_tok_per_sec": prompt_tok_per_sec,
-                    "done_reason": done_reason,
-                    "source": "proxy",
-                }
+                # Fallback for APIs that return token usage but no eval_duration fields.
+                elapsed_s = max(time.time() - start_ts, 0.001)
+                if tok_per_sec <= 0 and eval_tokens > 0:
+                    tok_per_sec = round(eval_tokens / elapsed_s, 2)
+                if prompt_tok_per_sec <= 0 and prompt_tokens > 0:
+                    prompt_tok_per_sec = round(prompt_tokens / elapsed_s, 2)
+
+                input_text = ''
+                output_text = ''
+                if log_prompts:
+                    input_text = _extract_input_text(body_json, path)
+                    output_text = _extract_output_text_streaming(accumulated, path)
+
+                entry = build_proxy_entry(
+                    status_code=ollama_resp.status_code,
+                    model_name=model_name,
+                    tokens=eval_tokens,
+                    prompt_tokens=prompt_tokens,
+                    tokens_per_sec=tok_per_sec,
+                    prompt_tok_per_sec=prompt_tok_per_sec,
+                    done_reason=done_reason,
+                    input_text=input_text,
+                    output_text=output_text
+                )
                 log_request(entry)
 
-            # Mirror Ollama's content type exactly
             ct = ollama_resp.headers.get('Content-Type', 'application/x-ndjson')
             return Response(stream_and_capture(), status=ollama_resp.status_code,
                            content_type=ct, direct_passthrough=True)
 
         elif is_trackable and not is_streaming:
-            # ── Non-streaming: read full response, capture stats ──
             resp_data = ollama_resp.content
-            elapsed_ms = (time.time() - start_ts) * 1000
 
             model_name = body_json.get('model', '—') if body_json else '—'
             eval_tokens = 0
@@ -387,11 +814,7 @@ def proxy_handler(path):
             try:
                 data = json.loads(resp_data)
                 model_name = data.get('model', model_name)
-                eval_tokens = data.get('eval_count', 0)
-                prompt_tokens = data.get('prompt_eval_count', 0)
-                eval_dur = data.get('eval_duration', 0)
-                prompt_dur = data.get('prompt_eval_duration', 0)
-                done_reason = data.get('done_reason', '')
+                eval_tokens, prompt_tokens, eval_dur, prompt_dur, done_reason = parse_token_stats(data, path)
                 if eval_dur > 0:
                     tok_per_sec = round(eval_tokens / max(eval_dur / 1e9, 0.001), 2)
                 if prompt_dur > 0:
@@ -399,32 +822,67 @@ def proxy_handler(path):
             except:
                 pass
 
-            entry = {
-                "time": datetime.now().isoformat(),
-                "time_display": datetime.now().strftime("%Y/%m/%d - %H:%M:%S"),
-                "status": ollama_resp.status_code,
-                "duration": _fmt_duration(elapsed_ms),
-                "duration_ms": round(elapsed_ms, 1),
-                "client_ip": client_ip,
-                "method": method,
-                "path": req_path,
-                "model": model_name,
-                "tokens": eval_tokens,
-                "prompt_tokens": prompt_tokens,
-                "total_tokens": eval_tokens + prompt_tokens,
-                "tokens_per_sec": tok_per_sec,
-                "prompt_tok_per_sec": prompt_tok_per_sec,
-                "done_reason": done_reason,
-                "source": "proxy",
-            }
+            # Fallback for APIs that return usage without explicit duration fields.
+            elapsed_s = max(time.time() - start_ts, 0.001)
+            if tok_per_sec <= 0 and eval_tokens > 0:
+                tok_per_sec = round(eval_tokens / elapsed_s, 2)
+            if prompt_tok_per_sec <= 0 and prompt_tokens > 0:
+                prompt_tok_per_sec = round(prompt_tokens / elapsed_s, 2)
+
+            input_text = ''
+            output_text = ''
+            if log_prompts:
+                input_text = _extract_input_text(body_json, path)
+                try:
+                    rd = json.loads(resp_data)
+                    # Ollama native
+                    output_text = rd.get('response', '')
+                    if not output_text:
+                        msg = rd.get('message')
+                        if isinstance(msg, dict):
+                            output_text = msg.get('content', '')
+                    # OpenAI compat
+                    if not output_text:
+                        choices = rd.get('choices')
+                        if isinstance(choices, list) and choices:
+                            output_text = choices[0].get('message', {}).get('content', '')
+                    # Anthropic compat
+                    if not output_text:
+                        content_blocks = rd.get('content')
+                        if isinstance(content_blocks, list):
+                            output_text = ''.join(
+                                b.get('text', '') for b in content_blocks
+                                if isinstance(b, dict) and b.get('type') == 'text'
+                            )
+                except:
+                    pass
+
+            entry = build_proxy_entry(
+                status_code=ollama_resp.status_code,
+                model_name=model_name,
+                tokens=eval_tokens,
+                prompt_tokens=prompt_tokens,
+                tokens_per_sec=tok_per_sec,
+                prompt_tok_per_sec=prompt_tok_per_sec,
+                done_reason=done_reason,
+                input_text=input_text,
+                output_text=output_text
+            )
             log_request(entry)
 
-            # Return exact response from Ollama
             ct = ollama_resp.headers.get('Content-Type', 'application/json')
             return Response(resp_data, status=ollama_resp.status_code, content_type=ct)
 
         else:
-            # ── Non-trackable: pure passthrough ──
+            model_name = body_json.get('model', '—') if isinstance(body_json, dict) else '—'
+            # Only log non-trackable requests that carry a real model name;
+            # skip health-check pings and other noise (HEAD /, GET /api/tags, …).
+            if model_name and model_name != '—':
+                log_request(build_proxy_entry(
+                    status_code=ollama_resp.status_code,
+                    model_name=model_name
+                ))
+
             def passthrough():
                 for chunk in ollama_resp.iter_content(chunk_size=None):
                     if chunk:
@@ -435,11 +893,22 @@ def proxy_handler(path):
                            content_type=ct, direct_passthrough=True)
 
     except requests.exceptions.ConnectionError:
+        log_request(build_proxy_entry(status_code=502, done_reason="ConnectionError"))
         return jsonify({"error": "Cannot connect to Ollama"}), 502
     except requests.exceptions.Timeout:
+        log_request(build_proxy_entry(status_code=504, done_reason="Timeout"))
         return jsonify({"error": "Ollama request timed out"}), 504
     except Exception as e:
+        log_request(build_proxy_entry(status_code=500, done_reason=f"ProxyError: {str(e)}"))
         return jsonify({"error": str(e)}), 500
+
+
+@proxy_app.route('/', defaults={'path': ''}, methods=['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD', 'OPTIONS'])
+@proxy_app.route('/<path:path>', methods=['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD', 'OPTIONS'])
+def proxy_handler(path):
+    """Transparent proxy: forward to Ollama, capture token stats from responses."""
+    target_url = f"{OLLAMA_URL}/{path}" if path else OLLAMA_URL
+    return proxy_forward(target_url, path)
 
 
 # ── Background poller ────────────────────────────────────────────
@@ -584,7 +1053,7 @@ def api_settings_get():
 def api_settings_save():
     data = flask_request.get_json(force=True)
     settings = load_settings()
-    allowed = ['poll_interval', 'client_map', 'retention_months', 'theme', 'mode', 'sync_theme']
+    allowed = ['poll_interval', 'client_map', 'retention_months', 'theme', 'mode', 'sync_theme', 'log_prompts']
     for k in allowed:
         if k in data:
             settings[k] = data[k]
@@ -598,6 +1067,9 @@ def api_status():
     data["dashboard_start"] = start_time
     data["ollama_url"] = OLLAMA_URL
     data["proxy_port"] = PROXY_PORT
+    data["proxy_timeout"] = PROXY_TIMEOUT
+    data["guardrails_enabled"] = bool(NEMO_GUARDRAILS_URL)
+    data["guardrails_fail_closed"] = NEMO_GUARDRAILS_FAIL_CLOSED
     data["proxy_ip"] = proxy_self_ip or "unknown"
     return jsonify(data)
 
@@ -673,6 +1145,7 @@ def api_trim():
                 if key in history and len(history[key]) > keep:
                     history[key] = history[key][-keep:]
             save_history(history)
+            _trim_prompts_file(history)
             return jsonify({"status": "trimmed", "mode": "count", "kept": keep})
 
         elif mode == 'time':
@@ -685,15 +1158,46 @@ def api_trim():
                         if entry.get("time", "") >= cutoff
                     ]
             save_history(history)
+            _trim_prompts_file(history)
             return jsonify({"status": "trimmed", "mode": "time", "months": months})
 
     return jsonify({"error": "Invalid mode"}), 400
+
+
+def _trim_prompts_file(history):
+    """Remove prompt entries whose IDs are no longer in history."""
+    if not os.path.exists(PROMPTS_FILE):
+        return
+    try:
+        keep_ids = {r.get('id') for r in history.get('requests', []) if r.get('id')}
+        kept_lines = []
+        with open(PROMPTS_FILE, 'r') as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    record = json.loads(line)
+                    if record.get('id') in keep_ids:
+                        kept_lines.append(line)
+                except:
+                    continue
+        with open(PROMPTS_FILE, 'w') as f:
+            f.write('\n'.join(kept_lines) + '\n' if kept_lines else '')
+    except Exception as e:
+        print(f"[PROMPTS] Trim error: {e}")
 
 @app.route('/api/clear', methods=['POST'])
 @login_required
 def api_clear():
     with history_lock:
         save_history({"requests": [], "benchmarks": [], "events": []})
+    # Clear prompts log
+    try:
+        if os.path.exists(PROMPTS_FILE):
+            os.remove(PROMPTS_FILE)
+    except Exception as e:
+        print(f"[PROMPTS] Clear error: {e}")
     return jsonify({"status": "cleared"})
 
 @app.route('/api/history/export')
@@ -705,27 +1209,58 @@ def api_export():
         'Content-Disposition': f'attachment; filename=ollama-history-{datetime.now().strftime("%Y%m%d")}.json'
     }
 
+@app.route('/api/prompt/<entry_id>')
+@login_required
+def api_prompt(entry_id):
+    """Look up prompt data by entry ID from the JSONL file."""
+    try:
+        if not os.path.exists(PROMPTS_FILE):
+            return jsonify({"input_text": "", "output_text": ""})
+        with open(PROMPTS_FILE, 'r') as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    record = json.loads(line)
+                    if record.get('id') == entry_id:
+                        return jsonify({
+                            "input_text": record.get("input_text", ""),
+                            "output_text": record.get("output_text", ""),
+                        })
+                except:
+                    continue
+    except Exception as e:
+        print(f"[PROMPTS] Read error: {e}")
+    return jsonify({"input_text": "", "output_text": ""})
+
 @app.route('/api/history/stats')
 @login_required
 def api_history_stats():
     with history_lock:
         history = load_history()
+        requests_list = history.get("requests", [])
         file_size = 0
         try:
             file_size = os.path.getsize(HISTORY_FILE)
         except:
             pass
         # Token stats from both proxied requests and benchmarks
-        req_gen_tokens = sum(r.get("tokens", 0) for r in history.get("requests", []))
-        req_prompt_tokens = sum(r.get("prompt_tokens", 0) for r in history.get("requests", []))
+        req_gen_tokens = sum(r.get("tokens", 0) for r in requests_list)
+        req_prompt_tokens = sum(r.get("prompt_tokens", 0) for r in requests_list)
         bench_gen_tokens = sum(b.get("eval_count", 0) for b in history.get("benchmarks", []))
         bench_prompt_tokens = sum(b.get("prompt_eval_count", 0) for b in history.get("benchmarks", []))
         total_gen = req_gen_tokens + bench_gen_tokens
         total_prompt = req_prompt_tokens + bench_prompt_tokens
-        proxied = sum(1 for r in history.get("requests", []) if r.get("source") == "proxy")
-        direct = sum(1 for r in history.get("requests", []) if r.get("source") == "direct")
+        proxied = sum(1 for r in requests_list if r.get("source") == "proxy")
+        direct = sum(1 for r in requests_list if r.get("source") == "direct")
+        errors = sum(1 for r in requests_list if int(r.get("status", 0) or 0) >= 400)
+        rejected = sum(
+            1 for r in requests_list
+            if int(r.get("status", 0) or 0) == 403 and "GuardrailsBlocked" in str(r.get("done_reason", ""))
+        )
         return jsonify({
-            "requests": len(history.get("requests", [])),
+            "requests": len(requests_list),
             "benchmarks": len(history.get("benchmarks", [])),
             "events": len(history.get("events", [])),
             "file_size_bytes": file_size,
@@ -735,6 +1270,9 @@ def api_history_stats():
             "total_prompt_tokens": total_prompt,
             "proxied_requests": proxied,
             "direct_requests": direct,
+            "error_requests": errors,
+            "rejected_requests": rejected,
+            "successful_requests": len(requests_list) - errors,
         })
 
 # ── Update Checker ───────────────────────────────────────────────
@@ -831,9 +1369,18 @@ if __name__ == '__main__':
 
     # Start proxy on port 11434 in background thread
     def run_proxy():
-        print(f"[PROXY] Ollama API Proxy starting on port {PROXY_PORT}")
-        print(f"[PROXY] Forwarding to: {OLLAMA_URL}")
-        proxy_app.run(host='0.0.0.0', port=PROXY_PORT, debug=False, threaded=True)
+        print(f"[PROXY] Ollama API Proxy starting on port {PROXY_PORT}", flush=True)
+        print(f"[PROXY] Forwarding to: {OLLAMA_URL}", flush=True)
+        print(f"[PROXY] Timeout: {PROXY_TIMEOUT}s", flush=True)
+        if NEMO_GUARDRAILS_URL:
+            print(f"[PROXY] Nemo Guardrails: enabled ({NEMO_GUARDRAILS_URL})", flush=True)
+            print(f"[PROXY] Nemo Guardrails timeout: {NEMO_GUARDRAILS_TIMEOUT}s (fail_closed={NEMO_GUARDRAILS_FAIL_CLOSED})", flush=True)
+        else:
+            print("[PROXY] Nemo Guardrails: disabled (set NEMO_GUARDRAILS_URL to enable)", flush=True)
+        try:
+            proxy_app.run(host='0.0.0.0', port=PROXY_PORT, debug=False, threaded=True)
+        except Exception as e:
+            print(f"[PROXY ERROR] {e}", flush=True)
 
     threading.Thread(target=run_proxy, daemon=True).start()
 
