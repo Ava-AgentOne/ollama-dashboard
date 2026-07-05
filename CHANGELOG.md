@@ -219,11 +219,13 @@ All notable changes to ollama-dashboard will be documented in this file.
 
 ## [v0.1] - 2026-02-20
 
-### Added
-- Initial release
-- Real-time model status monitoring via Ollama API
-- Request history from Docker container logs (GIN log parsing)
-- Live benchmarking with tokens/sec measurement
-- Model load/unload event tracking
-- 3 visual themes (Terminal, Cyberpunk, Ocean) with light/dark modes
-- Docker + Unraid deployment with community template
+### Initial public release
+- Real-time model status monitoring (loaded/unloaded detection)
+- Request history with token tracking, parsed from Docker logs
+- Built-in benchmarking with detailed metrics
+- 6 themes: Terminal, Cyberpunk, Ocean × Dark/Light modes
+- Hash-based deduplication for request history
+- Auto-polling with configurable interval
+- Update checker for base images
+- GitHub Actions CI/CD with auto-build to GHCR
+- Unraid template with br0 networking
