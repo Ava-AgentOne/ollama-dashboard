@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Ollama Intel iGPU Monitoring Dashboard v1.2 ‚Äî Backend + API Proxy"""
+"""Ollama Intel iGPU Monitoring Dashboard v1.2 — Backend + API Proxy"""
 
 from flask import Flask, jsonify, render_template, request as flask_request, Response, session, redirect, url_for
 from functools import wraps
@@ -14,12 +14,12 @@ import hashlib
 import secrets
 from datetime import datetime, timedelta
 
-# ‚îÄ‚îÄ Two Flask apps: Dashboard (8088) + Proxy (11434) ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ
+# ── Two Flask apps: Dashboard (8088) + Proxy (11434) ────────────
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', secrets.token_hex(32))
 proxy_app = Flask(__name__ + '_proxy')
 
-# ‚îÄ‚îÄ Configuration ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ
+# ── Configuration ────────────────────────────────────────────────
 OLLAMA_URL = os.environ.get('OLLAMA_URL', 'http://localhost:11434')
 OLLAMA_CONTAINER = os.environ.get('OLLAMA_CONTAINER', 'ollama-intel')
 DATA_DIR = os.environ.get('DATA_DIR', '/data')
@@ -47,7 +47,7 @@ NEMO_RAIL_DIALOG = _env_bool('NEMO_RAIL_DIALOG', False)
 NEMO_RAIL_RETRIEVAL = _env_bool('NEMO_RAIL_RETRIEVAL', False)
 NEMO_SKIP_BASE64 = _env_bool('NEMO_SKIP_BASE64', True)
 
-# Authentication ‚Äî empty = no auth required
+# Authentication — empty = no auth required
 DASHBOARD_PASSWORD = os.environ.get('DASHBOARD_PASSWORD', '')
 
 def login_required(f):
@@ -114,12 +114,12 @@ seen_entries = set()
 MAX_SEEN = 5000
 
 # Track currently active model (from API, not logs)
-active_model = "‚Äî"
+active_model = "—"
 
 # Track proxy's own IP to filter from GIN logs
 proxy_self_ip = None
 
-# ‚îÄ‚îÄ History persistence ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ
+# ── History persistence ──────────────────────────────────────────
 def load_history():
     try:
         if os.path.exists(HISTORY_FILE):
@@ -172,7 +172,7 @@ def log_request(entry):
             "output_text": output_text,
         })
 
-# ‚îÄ‚îÄ Request tracking from Docker logs (GIN lines only) ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ
+# ── Request tracking from Docker logs (GIN lines only) ───────────
 last_log_ts = time.time()
 
 def entry_hash(entry):
@@ -268,7 +268,7 @@ def parse_docker_logs():
     except Exception as e:
         return []
 
-# ‚îÄ‚îÄ Ollama API helpers ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ
+# ── Ollama API helpers ───────────────────────────────────────────
 def get_ollama_version():
     try:
         resp = requests.get(f"{OLLAMA_URL}/api/version", timeout=3)
@@ -361,10 +361,10 @@ def parse_token_stats(data, path):
     return eval_tokens, prompt_tokens, eval_dur, prompt_dur, done_reason
 
 
-# ‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê
-#  OLLAMA API PROXY ‚Äî runs on port 11434
+# ══════════════════════════════════════════════════════════════════
+#  OLLAMA API PROXY — runs on port 11434
 #  Forwards all requests to Ollama, captures token stats
-# ‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê
+# ══════════════════════════════════════════════════════════════════
 
 def _extract_input_text(body_json, path):
     """Extract human-readable input text from a request body."""
@@ -661,7 +661,7 @@ def proxy_forward(target_url, path):
 
     log_prompts = load_settings().get('log_prompts', False)
 
-    def build_proxy_entry(status_code, model_name='‚Äî', tokens=0, prompt_tokens=0,
+    def build_proxy_entry(status_code, model_name='—', tokens=0, prompt_tokens=0,
                           tokens_per_sec=0, prompt_tok_per_sec=0, done_reason='',
                           input_text='', output_text=''):
         elapsed_ms = (time.time() - start_ts) * 1000
@@ -709,7 +709,7 @@ def proxy_forward(target_url, path):
                 rejected_input = body.decode('utf-8', errors='replace')
             rejected_input = _sanitize_text_for_guardrails(rejected_input)[:NEMO_GUARDRAILS_MAX_BODY]
 
-            model_name = body_json.get('model', '‚Äî') if isinstance(body_json, dict) else '‚Äî'
+            model_name = body_json.get('model', '—') if isinstance(body_json, dict) else '—'
             blocked_entry = build_proxy_entry(
                 status_code=403,
                 model_name=model_name,
@@ -744,7 +744,7 @@ def proxy_forward(target_url, path):
                         yield chunk
                         accumulated += chunk
 
-                model_name = body_json.get('model', '‚Äî') if body_json else '‚Äî'
+                model_name = body_json.get('model', '—') if body_json else '—'
                 eval_tokens = 0
                 prompt_tokens = 0
                 tok_per_sec = 0
@@ -818,7 +818,7 @@ def proxy_forward(target_url, path):
         elif is_trackable and not is_streaming:
             resp_data = ollama_resp.content
 
-            model_name = body_json.get('model', '‚Äî') if body_json else '‚Äî'
+            model_name = body_json.get('model', '—') if body_json else '—'
             eval_tokens = 0
             prompt_tokens = 0
             tok_per_sec = 0
@@ -888,10 +888,10 @@ def proxy_forward(target_url, path):
             return Response(resp_data, status=ollama_resp.status_code, content_type=ct)
 
         else:
-            model_name = body_json.get('model', '‚Äî') if isinstance(body_json, dict) else '‚Äî'
+            model_name = body_json.get('model', '—') if isinstance(body_json, dict) else '—'
             # Only log non-trackable requests that carry a real model name;
-            # skip health-check pings and other noise (HEAD /, GET /api/tags, ‚Ä¶).
-            if model_name and model_name != '‚Äî':
+            # skip health-check pings and other noise (HEAD /, GET /api/tags, …).
+            if model_name and model_name != '—':
                 log_request(build_proxy_entry(
                     status_code=ollama_resp.status_code,
                     model_name=model_name
@@ -925,7 +925,7 @@ def proxy_handler(path):
     return proxy_forward(target_url, path)
 
 
-# ‚îÄ‚îÄ Background poller ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ
+# ── Background poller ────────────────────────────────────────────
 last_running = set()
 
 def poll_loop():
@@ -939,9 +939,9 @@ def poll_loop():
 
             running_models = ps_data.get("models", [])
             if running_models:
-                active_model = running_models[0].get("name", "‚Äî")
+                active_model = running_models[0].get("name", "—")
             else:
-                active_model = "‚Äî"
+                active_model = "—"
 
             model_details = get_model_details(ps_data)
             ollama_version = get_ollama_version()
@@ -989,16 +989,16 @@ def poll_loop():
                 "models": {"models": []},
                 "model_details": [],
                 "ollama_version": "unknown",
-                "active_model": "‚Äî",
+                "active_model": "—",
                 "error": str(e),
                 "polled_at": datetime.now().isoformat()
             }
 
         time.sleep(get_poll_interval())
 
-# ‚îÄ‚îÄ Dashboard API Endpoints ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ
+# ── Dashboard API Endpoints ──────────────────────────────────────
 
-# ‚îÄ‚îÄ Auth routes (unprotected) ‚îÄ‚îÄ
+# ── Auth routes (unprotected) ──
 @app.route('/login', methods=['GET'])
 def login_page():
     if not DASHBOARD_PASSWORD or session.get('authenticated'):
@@ -1027,7 +1027,7 @@ def logout():
     session.clear()
     return redirect(url_for('login_page'))
 
-# ‚îÄ‚îÄ PWA assets (unprotected) ‚îÄ‚îÄ
+# ── PWA assets (unprotected) ──
 @app.route('/sw.js')
 def service_worker():
     return app.send_static_file('sw.js')
@@ -1036,7 +1036,7 @@ def service_worker():
 def manifest():
     return app.send_static_file('manifest.json')
 
-# ‚îÄ‚îÄ Protected routes ‚îÄ‚îÄ
+# ── Protected routes ──
 @app.route('/')
 @login_required
 def dashboard():
@@ -1291,7 +1291,7 @@ def api_history_stats():
             "successful_requests": len(requests_list) - errors,
         })
 
-# ‚îÄ‚îÄ Update Checker ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ
+# ── Update Checker ───────────────────────────────────────────────
 @app.route('/api/updates')
 @login_required
 def api_updates():
@@ -1354,7 +1354,7 @@ def api_updates():
 
     return jsonify(results)
 
-# ‚îÄ‚îÄ Detect own IP for GIN log filtering ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ
+# ── Detect own IP for GIN log filtering ──────────────────────────
 def detect_self_ip():
     global proxy_self_ip
     try:
@@ -1365,9 +1365,9 @@ def detect_self_ip():
         s.close()
         print(f"[PROXY] Detected self IP: {proxy_self_ip} (will filter from GIN logs)")
     except:
-        print("[PROXY] Could not detect self IP ‚Äî proxy requests may appear as duplicates in GIN logs")
+        print("[PROXY] Could not detect self IP — proxy requests may appear as duplicates in GIN logs")
 
-# ‚îÄ‚îÄ Start ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ
+# ── Start ────────────────────────────────────────────────────────
 if __name__ == '__main__':
     os.makedirs(DATA_DIR, exist_ok=True)
     try:
@@ -1409,5 +1409,5 @@ if __name__ == '__main__':
     print(f"[DASHBOARD] Monitoring: {OLLAMA_URL}")
     print(f"[DASHBOARD] Container: {OLLAMA_CONTAINER}")
     print(f"[DASHBOARD] History: {HISTORY_FILE}")
-    print(f"[DASHBOARD] Proxy: port {PROXY_PORT} ‚Üí {OLLAMA_URL}")
+    print(f"[DASHBOARD] Proxy: port {PROXY_PORT} → {OLLAMA_URL}")
     serve(app, host='0.0.0.0', port=8088, threads=DASHBOARD_THREADS)
