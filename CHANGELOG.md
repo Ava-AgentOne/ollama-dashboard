@@ -2,6 +2,34 @@
 
 All notable changes to ollama-dashboard will be documented in this file.
 
+## [v1.2] - 2026-07-05
+
+### Changed
+- **Production WSGI server** — both the dashboard (8088) and the API proxy (11434) now run on waitress instead of the Flask development server; thread pools tunable via `PROXY_THREADS` (default 16) and `DASHBOARD_THREADS` (default 8)
+- Dependency bumps: flask 3.1.0 → 3.1.3, requests 2.32.3 → 2.34.2; base image python:3.11-slim → python:3.13-slim
+
+### Fixed
+- Login uses constant-time password comparison and delays failed attempts by 0.75s (brute-force hardening)
+- `poll_interval` is clamped to 1–300s at point of use — a saved value of 0 previously turned the poll loop into a busy loop hammering Ollama
+- `history.json` and `settings.json` writes are now atomic (temp file + rename), so a crash mid-write can no longer corrupt them
+- Update checker note pointed at the upstream `intelanalytics` image instead of `ghcr.io/ava-agentone/ollama-intel`
+
+### Added
+- Docker `HEALTHCHECK` on the dashboard port (shows healthy/unhealthy in the Unraid Docker tab)
+
+## [v1.1] - 2026-04-15
+
+*(Retroactive entry — v1.1 was tagged before its changes were recorded in the changelog.)*
+
+### Added (community contribution by @icordos)
+- **Track all APIs** — token/latency tracking extended beyond Ollama-native routes to all OpenAI-compatible (`/v1/chat/completions`) and Anthropic-compatible (`/v1/messages`) endpoints, including SSE streaming and `stream_options.include_usage` injection
+- **NVIDIA NeMo Guardrails integration** — optional pre-check of generation requests via `NEMO_GUARDRAILS_URL` with fail-closed behavior, rail toggles, base64 payload sanitization, and 403 `blocked_by_guardrails` responses logged to history
+- **Opt-in prompt logging** — full input/output text captured to append-only `prompts.jsonl` (kept out of `history.json`), viewable in the Request History popup
+- Configurable proxy timeout via `PROXY_TIMEOUT`; tokens/sec fallback when duration fields are absent
+
+### Fixed
+- gpt-oss and `/v1/messages` streams not tracking tokens; health-check noise no longer logged to history
+
 ## [v1.0] - 2026-02-21
 
 ### Added

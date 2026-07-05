@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Ollama Intel iGPU Monitoring Dashboard v1.0 — Backend + API Proxy"""
+"""Ollama Intel iGPU Monitoring Dashboard v1.2 — Backend + API Proxy"""
 
 from flask import Flask, jsonify, render_template, request as flask_request, Response, session, redirect, url_for
 from functools import wraps
+from waitress import serve
 import requests
 import json
 import os
@@ -27,6 +28,9 @@ PROMPTS_FILE = os.path.join(DATA_DIR, 'prompts.jsonl')
 POLL_INTERVAL = int(os.environ.get('POLL_INTERVAL', 5))
 PROXY_PORT = int(os.environ.get('PROXY_PORT', 11434))
 PROXY_TIMEOUT = int(os.environ.get('PROXY_TIMEOUT', 600))
+# Each in-flight request (including an active stream) holds one server thread
+PROXY_THREADS = int(os.environ.get('PROXY_THREADS', 16))
+DASHBOARD_THREADS = int(os.environ.get('DASHBOARD_THREADS', 8))
 
 def _env_bool(name, default):
     return os.environ.get(name, str(default)).strip().lower() in ('1', 'true', 'yes', 'on')
@@ -81,8 +85,10 @@ def load_settings():
 def save_settings(data):
     try:
         os.makedirs(DATA_DIR, exist_ok=True)
-        with open(SETTINGS_FILE, 'w') as f:
+        tmp = SETTINGS_FILE + '.tmp'
+        with open(tmp, 'w') as f:
             json.dump(data, f, indent=2)
+        os.replace(tmp, SETTINGS_FILE)
     except Exception as e:
         print(f"[SETTINGS] Save error: {e}")
 
@@ -92,7 +98,12 @@ def get_client_map():
 
 def get_poll_interval():
     settings = load_settings()
-    return settings.get('poll_interval', POLL_INTERVAL)
+    try:
+        interval = int(settings.get('poll_interval', POLL_INTERVAL))
+    except (TypeError, ValueError):
+        interval = POLL_INTERVAL
+    # A saved 0/negative value would turn the poll loop into a busy loop
+    return min(max(interval, 1), 300)
 
 history_lock = threading.Lock()
 current_status = {"status": "starting", "running": {"models": []}, "models": {"models": []}}
@@ -124,8 +135,11 @@ def load_history():
 
 def save_history(data):
     os.makedirs(DATA_DIR, exist_ok=True)
-    with open(HISTORY_FILE, 'w') as f:
+    # Atomic write: a crash mid-write must not corrupt the whole history
+    tmp = HISTORY_FILE + '.tmp'
+    with open(tmp, 'w') as f:
         json.dump(data, f, indent=2, default=str)
+    os.replace(tmp, HISTORY_FILE)
 
 def _append_prompt(prompt_entry):
     """Append a prompt record to the JSONL file (append-only, no full rewrite)."""
@@ -995,13 +1009,15 @@ def login_page():
 def login_submit():
     data = flask_request.get_json(force=True) if flask_request.is_json else {}
     password = data.get('password', flask_request.form.get('password', ''))
-    if password == DASHBOARD_PASSWORD:
+    if secrets.compare_digest(str(password), DASHBOARD_PASSWORD):
         session['authenticated'] = True
         session.permanent = True
         app.permanent_session_lifetime = timedelta(days=30)
         if flask_request.is_json:
             return jsonify({"ok": True})
         return redirect(url_for('dashboard'))
+    # Slow down brute-force attempts
+    time.sleep(0.75)
     if flask_request.is_json:
         return jsonify({"error": "wrong password"}), 401
     return render_template('login.html', error="Wrong password")
@@ -1318,7 +1334,7 @@ def api_updates():
                 "container": OLLAMA_CONTAINER,
                 "current_image_id": current_id,
                 "current_tags": current_tags,
-                "note": "To check for updates, run: docker pull intelanalytics/ipex-llm-inference-cpp-xpu:latest"
+                "note": "To check for updates, run: docker pull ghcr.io/ava-agentone/ollama-intel:latest"
             }
         except Exception as e:
             results["base_image"] = {"error": str(e)}
@@ -1369,7 +1385,7 @@ if __name__ == '__main__':
 
     # Start proxy on port 11434 in background thread
     def run_proxy():
-        print(f"[PROXY] Ollama API Proxy starting on port {PROXY_PORT}", flush=True)
+        print(f"[PROXY] Ollama API Proxy starting on port {PROXY_PORT} (waitress, {PROXY_THREADS} threads)", flush=True)
         print(f"[PROXY] Forwarding to: {OLLAMA_URL}", flush=True)
         print(f"[PROXY] Timeout: {PROXY_TIMEOUT}s", flush=True)
         if NEMO_GUARDRAILS_URL:
@@ -1378,16 +1394,20 @@ if __name__ == '__main__':
         else:
             print("[PROXY] Nemo Guardrails: disabled (set NEMO_GUARDRAILS_URL to enable)", flush=True)
         try:
-            proxy_app.run(host='0.0.0.0', port=PROXY_PORT, debug=False, threaded=True)
+            # channel_timeout must cover slow model loads where the stream
+            # produces no bytes for minutes before the first token
+            serve(proxy_app, host='0.0.0.0', port=PROXY_PORT,
+                  threads=PROXY_THREADS,
+                  channel_timeout=max(PROXY_TIMEOUT, 300))
         except Exception as e:
             print(f"[PROXY ERROR] {e}", flush=True)
 
     threading.Thread(target=run_proxy, daemon=True).start()
 
     # Start dashboard on port 8088
-    print(f"[DASHBOARD] Ollama Monitor v1.0 starting on port 8088")
+    print(f"[DASHBOARD] Ollama Monitor v1.2 starting on port 8088 (waitress, {DASHBOARD_THREADS} threads)")
     print(f"[DASHBOARD] Monitoring: {OLLAMA_URL}")
     print(f"[DASHBOARD] Container: {OLLAMA_CONTAINER}")
     print(f"[DASHBOARD] History: {HISTORY_FILE}")
     print(f"[DASHBOARD] Proxy: port {PROXY_PORT} → {OLLAMA_URL}")
-    app.run(host='0.0.0.0', port=8088, debug=False, threaded=True)
+    serve(app, host='0.0.0.0', port=8088, threads=DASHBOARD_THREADS)
