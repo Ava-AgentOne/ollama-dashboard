@@ -169,6 +169,12 @@ When the URL is empty (default), guardrails are disabled and the proxy behaves n
 
 By default, `NEMO_GUARDRAILS_FAIL_CLOSED=true` — if the guardrails service is unreachable or returns an error, the proxy will **block** the request. Set to `false` to allow requests through when guardrails are unavailable.
 
+How the guardrails reply is read:
+
+- **A JSON verdict** such as `{"allowed": false, "reason": "..."}` (or `blocked`, `safe`, `action`, `verdict` keys) is followed in both modes.
+- **Plain text instead of a JSON verdict** blocks the request in both modes, with the text recorded as the reason. This is what NeMo sends when one of its own rails stops a request (for example "I'm sorry, I can't respond to that.").
+- **No usable reply** — unreachable, timed out, an HTTP error, an empty reply, or JSON without a verdict — follows `NEMO_GUARDRAILS_FAIL_CLOSED`: blocked when `true`, allowed when `false`.
+
 ### What Gets Checked
 
 Only generation endpoints are checked (`/api/chat`, `/api/generate`, `/v1/*`). Metadata routes like `/api/tags` and health checks pass through without a guardrails check.
@@ -227,7 +233,7 @@ Alternatively, paste the template URL directly in Unraid:
 |----------|---------|-------------|
 | `NEMO_GUARDRAILS_URL` | `` | Nemo Guardrails check endpoint; when set, every proxied request is checked before forwarding |
 | `NEMO_GUARDRAILS_TIMEOUT` | `15` | Timeout for guardrails pre-check request (seconds) |
-| `NEMO_GUARDRAILS_FAIL_CLOSED` | `true` | If `true`, block Ollama calls when guardrails is unavailable/errors |
+| `NEMO_GUARDRAILS_FAIL_CLOSED` | `true` | If `true`, block Ollama calls when guardrails is unavailable, errors, or gives no verdict |
 | `NEMO_GUARDRAILS_MAX_BODY` | `20000` | Max request body chars sent to guardrails for evaluation |
 | `NEMO_GUARDRAILS_MODEL` | `gemma4:e4b` | Model used for guardrails classification via `v1/chat/completions` |
 | `NEMO_CONFIG_ID` | `default-safe` | Nemo Guardrails config id sent as `guardrails.config_id` |
@@ -306,6 +312,7 @@ Hard refresh your browser: **Ctrl+Shift+R** (or **Cmd+Shift+R** on Mac) to bypas
 - Check that your Nemo Guardrails service is running and reachable
 - If `NEMO_GUARDRAILS_FAIL_CLOSED=true` (default), requests will be blocked when guardrails is unavailable
 - Review the dashboard request history — blocked requests show with status `403` and reason `GuardrailsBlocked`
+- A reason like "Guardrails returned no verdict" means the guardrails model isn't answering with a JSON verdict — check `NEMO_GUARDRAILS_MODEL` and your NeMo config. Plain sentences as the reason are refusals from NeMo's own rails
 - Try setting `NEMO_GUARDRAILS_FAIL_CLOSED=false` temporarily to verify Ollama connectivity
 </details>
 
