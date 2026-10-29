@@ -1108,6 +1108,12 @@ function fmtNum(n) {
   if(n>=1000) return (n/1000).toFixed(1)+'K';
   return n.toString();
 }
+// Escape for innerHTML (text and quoted attributes). Model names, paths, client
+// names and error reasons come from proxied requests, Ollama's logs and saved
+// settings, so anyone who can reach the proxy can choose them.
+function esc(v) {
+  return String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
 function showToast(msg, err) {
   const t=document.getElementById('toast');
   t.textContent=msg; t.className=err?'toast error show':'toast show';
@@ -1221,7 +1227,7 @@ async function showPopup(idx) {
 
   document.getElementById('popupTitle').textContent = `${client.icon} ${r.model || 'Request'} — ${fmtTime(r.time)}`;
   let html = items.map(i =>
-    `<div class="popup-item"><div class="popup-label">${i.label}</div><div class="popup-value ${i.cls}">${i.value}</div></div>`
+    `<div class="popup-item"><div class="popup-label">${i.label}</div><div class="popup-value ${i.cls}">${esc(i.value)}</div></div>`
   ).join('');
 
   // Show loading placeholder if prompt data exists
@@ -1238,7 +1244,6 @@ async function showPopup(idx) {
     try {
       const resp = await fetch(`${API}/api/prompt/${r.id}`);
       const data = await resp.json();
-      const esc = s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
       const inputEl = document.getElementById('popupInput');
       const outputEl = document.getElementById('popupOutput');
       if (inputEl) { inputEl.style.color = ''; inputEl.innerHTML = data.input_text ? esc(data.input_text) : '<span style="color:var(--text-muted)">—</span>'; }
@@ -1313,15 +1318,15 @@ async function fetchStatus() {
     else {
       tb.innerHTML=models.map(m=>{
         const a=runNames.has(m.name);
-        return `<tr><td class="td-name">${m.name}</td><td class="td-dim">${fmtBytes(m.size)}</td>
-        <td class="td-dim hide-mobile">${m.details?.quantization_level||'—'}</td>
+        return `<tr><td class="td-name">${esc(m.name)}</td><td class="td-dim">${fmtBytes(m.size)}</td>
+        <td class="td-dim hide-mobile">${esc(m.details?.quantization_level||'—')}</td>
         <td><span class="pip ${a?'on':'off'}"></span><span style="font-size:13px;letter-spacing:1px;color:${a?'var(--accent-1)':'var(--text-muted)'}">${a?'LOADED':'IDLE'}</span></td></tr>`;
       }).join('');
     }
 
     const sel=document.getElementById('benchModel');
     const cv=sel.value;
-    sel.innerHTML=models.map(m=>`<option value="${m.name}" ${m.name===cv?'selected':''}>${m.name}</option>`).join('');
+    sel.innerHTML=models.map(m=>`<option value="${esc(m.name)}" ${m.name===cv?'selected':''}>${esc(m.name)}</option>`).join('');
   } catch(e) {
     document.getElementById('connDot').className='conn-dot offline';
     document.getElementById('connLabel').textContent='ERROR';
@@ -1391,7 +1396,7 @@ function updateClientDropdown(reqs) {
   let html = '<option value="all">All Clients</option>';
   ips.forEach(ip => {
     const c = getClient(ip);
-    html += `<option value="${ip}" ${ip===prev?'selected':''}>${c.icon} ${c.name}</option>`;
+    html += `<option value="${esc(ip)}" ${ip===prev?'selected':''}>${esc(c.icon)} ${esc(c.name)}</option>`;
   });
   sel.innerHTML = html;
 }
@@ -1694,17 +1699,17 @@ function renderHistory() {
       const statusInfo = getRequestStatus(r);
       const modelText = (r.model && r.model !== '—') ? r.model : '—';
       const modelCell = statusInfo
-        ? `<span class="req-flag ${statusInfo.cls}">${statusInfo.label}</span><span class="req-msg">${statusInfo.detail}</span>`
-        : `<span class="req-model">${modelText}</span>`;
+        ? `<span class="req-flag ${statusInfo.cls}">${statusInfo.label}</span><span class="req-msg">${esc(statusInfo.detail)}</span>`
+        : `<span class="req-model">${esc(modelText)}</span>`;
       const rowClass = statusInfo ? `clickable-row ${statusInfo.rowClass}` : 'clickable-row';
       return `<tr class="${rowClass}" onclick="showPopup(${i})">
-        <td class="td-dim">${fmtTime(r.time)}</td>
-        <td class="td-dur hide-mobile">${r.duration||'—'}</td>
+        <td class="td-dim">${esc(fmtTime(r.time))}</td>
+        <td class="td-dur hide-mobile">${esc(r.duration||'—')}</td>
         <td class="td-model">${modelCell}</td>
         <td class="td-tok">${inTok}</td>
         <td class="td-tok">${outTok}</td>
         <td class="td-dur">${tps}</td>
-        <td class="td-dim"><span class="client-icon">${client.icon}</span>${client.name}</td>
+        <td class="td-dim"><span class="client-icon">${esc(client.icon)}</span>${esc(client.name)}</td>
       </tr>`;
     }).join('');
 
@@ -1729,12 +1734,12 @@ function renderHistory() {
     const eventIcons = { load:'🟢', unload:'🔴', warning:'⚠️', error:'❌' };
     eb.innerHTML=events.slice(0,100).map(e=>{
       const icon = eventIcons[e.type] || '⚪';
-      const detail = e.detail ? `<span class="event-detail">${e.detail}</span>` : '';
+      const detail = e.detail ? `<span class="event-detail">${esc(e.detail)}</span>` : '';
       return `<div class="event-line">
         <span class="event-icon">${icon}</span>
-        <span class="event-time">${fmtTime(e.time)}</span>
-        <span class="event-tag ${e.type}">${e.type}</span>
-        <span class="event-model">${e.model||'—'}</span>
+        <span class="event-time">${esc(fmtTime(e.time))}</span>
+        <span class="event-tag ${esc(e.type)}">${esc(e.type)}</span>
+        <span class="event-model">${esc(e.model||'—')}</span>
         ${detail}
       </div>`;
     }).join('');
@@ -2055,9 +2060,9 @@ function renderClientMapEditor(map) {
   }
   list.innerHTML = entries.map(([ip, info], i) =>
     `<div class="client-map-row" data-idx="${i}">
-      <input class="input icon cm-icon" value="${info.icon||'🤖'}" placeholder="🤖" maxlength="4">
-      <input class="input ip cm-ip" value="${ip}" placeholder="IP address">
-      <input class="input name cm-name" value="${info.name||''}" placeholder="Friendly name">
+      <input class="input icon cm-icon" value="${esc(info.icon||'🤖')}" placeholder="🤖" maxlength="4">
+      <input class="input ip cm-ip" value="${esc(ip)}" placeholder="IP address">
+      <input class="input name cm-name" value="${esc(info.name||'')}" placeholder="Friendly name">
       <button class="btn-sm err" onclick="this.parentElement.remove()">✕</button>
     </div>`
   ).join('');
@@ -2137,21 +2142,21 @@ async function checkUpdates() {
     const pkgs=d.dashboard_packages||[];
     if(pkgs.length){
       document.getElementById('pkgList').innerHTML=pkgs.map(p=>`<div class="pkg-row">
-        <span class="pkg-name">${p.package}</span>
-        <span class="pkg-ver">${p.current}</span>
+        <span class="pkg-name">${esc(p.package)}</span>
+        <span class="pkg-ver">${esc(p.current)}</span>
         <span>→</span>
-        <span class="${p.update_available?'pkg-new':'pkg-ok'}">${p.latest} ${p.update_available?'⬆ UPDATE':'✓'}</span>
+        <span class="${p.update_available?'pkg-new':'pkg-ok'}">${esc(p.latest)} ${p.update_available?'⬆ UPDATE':'✓'}</span>
       </div>`).join('');
     }
 
     const img=d.base_image||{};
     if(img.error){
-      document.getElementById('imageInfo').innerHTML=`<div class="empty">${img.error}</div>`;
+      document.getElementById('imageInfo').innerHTML=`<div class="empty">${esc(img.error)}</div>`;
     } else {
       document.getElementById('imageInfo').innerHTML=`<div class="pkg-row">
-        <span class="pkg-name">${img.container||'—'}</span>
-        <span class="pkg-ver">${img.current_image_id||'—'}</span>
-      </div><p style="font-size:14px;color:var(--text-dim);margin-top:8px;">${img.note||''}</p>`;
+        <span class="pkg-name">${esc(img.container||'—')}</span>
+        <span class="pkg-ver">${esc(img.current_image_id||'—')}</span>
+      </div><p style="font-size:14px;color:var(--text-dim);margin-top:8px;">${esc(img.note||'')}</p>`;
     }
 
     showToast('Update check complete');
