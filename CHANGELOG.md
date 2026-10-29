@@ -2,6 +2,19 @@
 
 All notable changes to ollama-dashboard will be documented in this file.
 
+## [v1.2.1] - 2026-10-29
+
+### Security
+- **Stored XSS in the dashboard** — model names, request paths, client names, error reasons, events and update-checker results were inserted into the page as raw HTML. The proxy port needs no login and records the `model` field of any request, so anyone who could reach it could run script in the dashboard. All of these values are now escaped
+- **Guardrails fail-closed let requests through** — NeMo's own refusals ("I'm sorry, I can't respond to that."), empty replies and string verdicts like `{"allowed": "false"}` were treated as allowed, even with `NEMO_GUARDRAILS_FAIL_CLOSED=true`. A plain-text reply now blocks in both modes, and a missing verdict follows the fail mode
+- **Docker socket no longer described as read-only** — a `:ro` mount doesn't limit the Docker API, so the mount gives full control of Docker. It's now optional in the Unraid template, and the README explains the access it gives and how to use a read-only socket proxy instead
+
+### Added
+- `DOCKER_HOST` ("Docker API URL" in the Unraid template) to read Ollama's logs through a socket proxy instead of the mounted socket
+
+### Fixed
+- Logging in with `DASHBOARD_PASSWORD` failed with HTTP 500 when `SECRET_KEY` was left blank (Unraid passes blank fields as empty strings); a blank key now auto-generates like an unset one
+
 ## [v1.2] - 2026-07-05
 
 ### Changed
