@@ -16,7 +16,9 @@ from datetime import datetime, timedelta
 
 # ── Two Flask apps: Dashboard (8088) + Proxy (11434) ────────────
 app = Flask(__name__)
-app.secret_key = os.environ.get('SECRET_KEY', secrets.token_hex(32))
+# Unraid passes a blank template field as an empty string, and Flask can't
+# create sessions with an empty key, so treat blank the same as unset
+app.secret_key = os.environ.get('SECRET_KEY', '').strip() or secrets.token_hex(32)
 proxy_app = Flask(__name__ + '_proxy')
 
 # ── Configuration ────────────────────────────────────────────────
