@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Ollama Intel iGPU Monitoring Dashboard v1.2 — Backend + API Proxy"""
+"""Ollama Intel iGPU Monitoring Dashboard v1.2.1 — Backend + API Proxy"""
 
 from flask import Flask, jsonify, render_template, request as flask_request, Response, session, redirect, url_for
 from functools import wraps
@@ -16,7 +16,9 @@ from datetime import datetime, timedelta
 
 # ── Two Flask apps: Dashboard (8088) + Proxy (11434) ────────────
 app = Flask(__name__)
-app.secret_key = os.environ.get('SECRET_KEY', secrets.token_hex(32))
+# Unraid passes a blank template field as an empty string, and Flask can't
+# create sessions with an empty key, so treat blank the same as unset
+app.secret_key = os.environ.get('SECRET_KEY', '').strip() or secrets.token_hex(32)
 proxy_app = Flask(__name__ + '_proxy')
 
 # ── Configuration ────────────────────────────────────────────────
@@ -533,6 +535,52 @@ def _extract_json_object(text):
         return None
 
 
+def _guardrails_unavailable(reason):
+    """No usable verdict (service down, error, empty reply): block only when fail-closed."""
+    if NEMO_GUARDRAILS_FAIL_CLOSED:
+        return False, reason
+    return True, ''
+
+
+def _verdict_flag(value):
+    """Read a verdict flag that a small model may emit as a bool or as a string."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str) and value.strip().lower() in ('true', 'yes', 'false', 'no'):
+        return value.strip().lower() in ('true', 'yes')
+    return None
+
+
+def _guardrails_verdict(data):
+    """True to allow, False to block, None when the reply carries no recognisable verdict."""
+    allowed = _verdict_flag(data.get('allowed'))
+    blocked = _verdict_flag(data.get('blocked'))
+    safe = _verdict_flag(data.get('safe'))
+    action = str(data.get('action', '')).strip().lower()
+    verdict = str(data.get('verdict', '')).strip().lower()
+    if (allowed is False or blocked is True or safe is False or
+            action in ('block', 'deny', 'reject') or
+            verdict in ('block', 'deny', 'reject', 'unsafe')):
+        return False
+    if (allowed is True or blocked is False or safe is True or
+            action in ('allow', 'pass', 'accept') or
+            verdict in ('allow', 'pass', 'accept', 'safe')):
+        return True
+    return None
+
+
+def _guardrails_reply_text(data):
+    """Assistant text of a chat reply (OpenAI `choices` or classic NeMo `messages`), else None."""
+    choices = data.get('choices')
+    if isinstance(choices, list) and choices and isinstance(choices[0], dict):
+        msg = choices[0].get('message')
+        return str(msg.get('content') or '') if isinstance(msg, dict) else ''
+    messages = data.get('messages')
+    if isinstance(messages, list) and messages and isinstance(messages[-1], dict):
+        return str(messages[-1].get('content') or '')
+    return None
+
+
 def _guardrails_check(method, req_path, client_ip, headers, body_json, body_bytes):
     """Run Nemo Guardrails check. Returns (allowed, reason)."""
     if not NEMO_GUARDRAILS_URL:
@@ -582,34 +630,30 @@ def _guardrails_check(method, req_path, client_ip, headers, body_json, body_byte
             timeout=NEMO_GUARDRAILS_TIMEOUT
         )
         if not resp.ok:
-            if NEMO_GUARDRAILS_FAIL_CLOSED:
-                return False, f"Guardrails service error ({resp.status_code})"
-            return True, ''
+            return _guardrails_unavailable(f"Guardrails service error ({resp.status_code})")
 
-        data = {}
         try:
             data = resp.json() if resp.content else {}
         except Exception:
-            if NEMO_GUARDRAILS_FAIL_CLOSED:
-                return False, "Guardrails returned non-JSON response"
-            return True, ''
+            return _guardrails_unavailable("Guardrails returned non-JSON response")
+        if not isinstance(data, dict):
+            return _guardrails_unavailable("Guardrails returned no verdict")
 
-        # If the model returns OpenAI-style chat completion, extract JSON verdict from content.
-        if isinstance(data.get('choices'), list) and data.get('choices'):
-            msg = data['choices'][0].get('message', {})
-            content = msg.get('content', '') if isinstance(msg, dict) else ''
-            parsed = _extract_json_object(content)
-            if isinstance(parsed, dict):
-                data = parsed
+        # A chat-completion reply carries the verdict as JSON text in the message.
+        reply = _guardrails_reply_text(data)
+        if reply is not None:
+            parsed = _extract_json_object(reply)
+            if not isinstance(parsed, dict):
+                if reply.strip():
+                    # Prose instead of a JSON verdict is what NeMo sends when one of
+                    # its own rails stops the request ("I'm sorry, I can't respond
+                    # to that."), so it blocks whatever the fail mode.
+                    return False, reply.strip()[:300]
+                return _guardrails_unavailable("Guardrails returned an empty reply")
+            data = parsed
 
-        blocked = (
-            data.get('allowed') is False or
-            data.get('blocked') is True or
-            data.get('safe') is False or
-            str(data.get('action', '')).lower() in ('block', 'deny', 'reject') or
-            str(data.get('verdict', '')).lower() in ('block', 'deny', 'reject', 'unsafe')
-        )
-        if blocked:
+        verdict = _guardrails_verdict(data)
+        if verdict is False:
             reason = (
                 data.get('reason') or
                 data.get('message') or
@@ -617,16 +661,13 @@ def _guardrails_check(method, req_path, client_ip, headers, body_json, body_byte
                 'Flagged by Nemo Guardrails'
             )
             return False, str(reason)
-
-        return True, ''
+        if verdict is True:
+            return True, ''
+        return _guardrails_unavailable("Guardrails returned no verdict")
     except requests.exceptions.Timeout:
-        if NEMO_GUARDRAILS_FAIL_CLOSED:
-            return False, "Guardrails check timed out"
-        return True, ''
+        return _guardrails_unavailable("Guardrails check timed out")
     except Exception as e:
-        if NEMO_GUARDRAILS_FAIL_CLOSED:
-            return False, f"Guardrails check failed: {str(e)}"
-        return True, ''
+        return _guardrails_unavailable(f"Guardrails check failed: {str(e)}")
 
 def proxy_forward(target_url, path):
     """Forward request to Ollama (common code for proxy handler)."""
@@ -1405,7 +1446,7 @@ if __name__ == '__main__':
     threading.Thread(target=run_proxy, daemon=True).start()
 
     # Start dashboard on port 8088
-    print(f"[DASHBOARD] Ollama Monitor v1.2 starting on port 8088 (waitress, {DASHBOARD_THREADS} threads)")
+    print(f"[DASHBOARD] Ollama Monitor v1.2.1 starting on port 8088 (waitress, {DASHBOARD_THREADS} threads)")
     print(f"[DASHBOARD] Monitoring: {OLLAMA_URL}")
     print(f"[DASHBOARD] Container: {OLLAMA_CONTAINER}")
     print(f"[DASHBOARD] History: {HISTORY_FILE}")

@@ -97,6 +97,8 @@ docker run -d \\
 
 > ⚠️ **Networking Note**: If your Ollama container runs on br0 (macvlan), the dashboard must also be on br0. Linux hosts cannot reach their own macvlan containers — so using `host` networking for the dashboard while Ollama is on br0 will result in "No route to host" errors.
 
+> The `docker.sock` line in both examples is optional and gives the container full control of Docker — see [Docker Socket (Optional)](#docker-socket-optional).
+
 ## 🔀 API Proxy (Token Tracking)
 
 The dashboard includes a built-in **Ollama API proxy** on port **11434**. Point your clients to the dashboard instead of Ollama directly, and every request gets full token tracking.
@@ -142,7 +144,7 @@ The proxy is 100% transparent — same API, same responses. Clients won't notice
 | **Via proxy** | ✅ | ✅ | ✅ | ✅ |
 | **Direct to Ollama** | ✅ | ❌ | ✅ | ✅ |
 
-Requests that bypass the proxy still appear in history (from Docker log parsing) but without token counts.
+Requests that bypass the proxy still appear in history (from Docker log parsing) but without token counts. This needs Docker access — see **Docker Socket (Optional)**.
 
 ## 🛡️ Nemo Guardrails (Optional)
 
@@ -168,6 +170,12 @@ When the URL is empty (default), guardrails are disabled and the proxy behaves n
 ### Fail-Closed Mode
 
 By default, `NEMO_GUARDRAILS_FAIL_CLOSED=true` — if the guardrails service is unreachable or returns an error, the proxy will **block** the request. Set to `false` to allow requests through when guardrails are unavailable.
+
+How the guardrails reply is read:
+
+- **A JSON verdict** such as `{"allowed": false, "reason": "..."}` (or `blocked`, `safe`, `action`, `verdict` keys) is followed in both modes.
+- **Plain text instead of a JSON verdict** blocks the request in both modes, with the text recorded as the reason. This is what NeMo sends when one of its own rails stops a request (for example "I'm sorry, I can't respond to that.").
+- **No usable reply** — unreachable, timed out, an HTTP error, an empty reply, or JSON without a verdict — follows `NEMO_GUARDRAILS_FAIL_CLOSED`: blocked when `true`, allowed when `false`.
 
 ### What Gets Checked
 
@@ -220,6 +228,7 @@ Alternatively, paste the template URL directly in Unraid:
 | `POLL_INTERVAL` | `5` | How often to poll Ollama status (seconds) |
 | `PROXY_TIMEOUT` | `600` | Proxy upstream timeout to Ollama (seconds) |
 | `DATA_DIR` | `/data` | Path for persistent history storage |
+| `DOCKER_HOST` | *(the mounted socket)* | Docker API to read Ollama's logs from, e.g. a read-only socket proxy at `tcp://dashboard-docker-proxy:2375` (see **Docker Socket** below) |
 
 ### Nemo Guardrails Variables
 
@@ -227,7 +236,7 @@ Alternatively, paste the template URL directly in Unraid:
 |----------|---------|-------------|
 | `NEMO_GUARDRAILS_URL` | `` | Nemo Guardrails check endpoint; when set, every proxied request is checked before forwarding |
 | `NEMO_GUARDRAILS_TIMEOUT` | `15` | Timeout for guardrails pre-check request (seconds) |
-| `NEMO_GUARDRAILS_FAIL_CLOSED` | `true` | If `true`, block Ollama calls when guardrails is unavailable/errors |
+| `NEMO_GUARDRAILS_FAIL_CLOSED` | `true` | If `true`, block Ollama calls when guardrails is unavailable, errors, or gives no verdict |
 | `NEMO_GUARDRAILS_MAX_BODY` | `20000` | Max request body chars sent to guardrails for evaluation |
 | `NEMO_GUARDRAILS_MODEL` | `gemma4:e4b` | Model used for guardrails classification via `v1/chat/completions` |
 | `NEMO_CONFIG_ID` | `default-safe` | Nemo Guardrails config id sent as `guardrails.config_id` |
@@ -242,7 +251,28 @@ Alternatively, paste the template URL directly in Unraid:
 | Host Path | Container Path | Mode | Purpose |
 |-----------|---------------|------|----------|
 | `/mnt/user/appdata/ollama-dashboard` | `/data` | rw | Persistent history & benchmark data |
-| `/var/run/docker.sock` | `/var/run/docker.sock` | ro | Read Ollama container logs (read-only) |
+| `/var/run/docker.sock` | `/var/run/docker.sock` | ro | *Optional:* read Ollama's container logs. Gives full Docker access — see below |
+
+### Docker Socket (Optional)
+
+The socket lets the dashboard read your Ollama container's logs, so requests that bypass the proxy still show up in history, and lets the update checker show which image Ollama runs. Everything else works without it: if all your clients use the proxy port, you can leave it out.
+
+> ⚠️ **Mounting the socket `:ro` does not make it read-only.** The flag only protects the socket file. The Docker API behind it still accepts every command, including starting privileged containers, which amounts to root access on the host. Only mount it if you're comfortable giving the dashboard that much access.
+
+To keep direct-request tracking with less access, run a socket proxy that only allows reads, and point the dashboard at it with `DOCKER_HOST` instead of mounting the socket. The dashboard only makes `GET` requests: `/version`, the Ollama container's info and logs, and that container's image info.
+
+```bash
+docker network create dashboard-docker
+docker run -d --name dashboard-docker-proxy --restart unless-stopped \
+  --network dashboard-docker \
+  -e CONTAINERS=1 -e IMAGES=1 \
+  -v /var/run/docker.sock:/var/run/docker.sock:ro \
+  tecnativa/docker-socket-proxy
+```
+
+Then run the dashboard with `--network dashboard-docker -e DOCKER_HOST=tcp://dashboard-docker-proxy:2375` and without the `docker.sock` mount.
+
+Keep the proxy reachable by the dashboard only: don't publish its port or put it on br0. Anything that can reach it can read every container's logs and settings, including their environment variables. On Unraid with the dashboard on br0, that rules the proxy out, so choose between leaving the socket out and mounting it with the access described above.
 
 ## 🏗️ Tech Stack
 
@@ -289,7 +319,7 @@ Alternatively, paste the template URL directly in Unraid:
 <details>
 <summary><strong>No request history showing</strong></summary>
 
-- Ensure the Docker socket is mounted: `-v /var/run/docker.sock:/var/run/docker.sock:ro`
+- Ensure the Docker socket is mounted (`-v /var/run/docker.sock:/var/run/docker.sock:ro`), or that `DOCKER_HOST` points at your socket proxy
 - Verify `OLLAMA_CONTAINER` matches your Ollama container name exactly
 - Enable debug logging on Ollama (`OLLAMA_DEBUG=1`) for detailed request logs
 </details>
@@ -306,6 +336,7 @@ Hard refresh your browser: **Ctrl+Shift+R** (or **Cmd+Shift+R** on Mac) to bypas
 - Check that your Nemo Guardrails service is running and reachable
 - If `NEMO_GUARDRAILS_FAIL_CLOSED=true` (default), requests will be blocked when guardrails is unavailable
 - Review the dashboard request history — blocked requests show with status `403` and reason `GuardrailsBlocked`
+- A reason like "Guardrails returned no verdict" means the guardrails model isn't answering with a JSON verdict — check `NEMO_GUARDRAILS_MODEL` and your NeMo config. Plain sentences as the reason are refusals from NeMo's own rails
 - Try setting `NEMO_GUARDRAILS_FAIL_CLOSED=false` temporarily to verify Ollama connectivity
 </details>
 
