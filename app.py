@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Ollama Intel iGPU Monitoring Dashboard v1.2.1 — Backend + API Proxy"""
+"""Ollama Intel iGPU Monitoring Dashboard v1.2.2 — Backend + API Proxy"""
 
 from flask import Flask, jsonify, render_template, request as flask_request, Response, session, redirect, url_for
 from functools import wraps
@@ -19,6 +19,9 @@ app = Flask(__name__)
 # Unraid passes a blank template field as an empty string, and Flask can't
 # create sessions with an empty key, so treat blank the same as unset
 app.secret_key = os.environ.get('SECRET_KEY', '').strip() or secrets.token_hex(32)
+# Lax stops the browser from sending the login cookie with requests that other
+# websites start, such as a hidden form that posts to /api/clear
+app.config.update(SESSION_COOKIE_SAMESITE='Lax', SESSION_COOKIE_HTTPONLY=True)
 proxy_app = Flask(__name__ + '_proxy')
 
 # ── Configuration ────────────────────────────────────────────────
@@ -64,6 +67,23 @@ def login_required(f):
             return jsonify({"error": "unauthorized"}), 401
         return redirect(url_for('login_page'))
     return decorated
+
+@app.before_request
+def require_json_for_changes():
+    """Refuse state-changing requests that aren't JSON.
+
+    Another website can make a visitor's browser post a form here, but a form
+    can't send Content-Type: application/json, and a script on another site
+    can only send it after a CORS check this app never approves. Requiring
+    JSON therefore stops other sites from changing settings or clearing
+    history, with or without a password. The login form is exempt: it only
+    accepts the right password.
+    """
+    if flask_request.method in ('GET', 'HEAD', 'OPTIONS') or flask_request.path == '/login':
+        return None
+    if not flask_request.is_json:
+        return jsonify({"error": "send JSON with Content-Type: application/json"}), 415
+    return None
 
 # Client name mapping (JSON string from env, or empty)
 _cm = os.environ.get('CLIENT_MAP', '{}')
@@ -745,22 +765,22 @@ def proxy_forward(target_url, path):
             body_bytes=body
         )
         if not allowed:
-            rejected_input = _extract_input_text(body_json, path)
-            if not rejected_input and body:
-                rejected_input = body.decode('utf-8', errors='replace')
-            rejected_input = _sanitize_text_for_guardrails(rejected_input)[:NEMO_GUARDRAILS_MAX_BODY]
+            # Like any other request, the prompt is kept only when prompt
+            # logging is on. The block and its reason are always recorded.
+            rejected_input = ''
+            if log_prompts:
+                rejected_input = _extract_input_text(body_json, path)
+                if not rejected_input and body:
+                    rejected_input = body.decode('utf-8', errors='replace')
+                rejected_input = _sanitize_text_for_guardrails(rejected_input)[:NEMO_GUARDRAILS_MAX_BODY]
 
             model_name = body_json.get('model', '—') if isinstance(body_json, dict) else '—'
             blocked_entry = build_proxy_entry(
                 status_code=403,
                 model_name=model_name,
-                done_reason=f"GuardrailsBlocked: {guardrails_reason}"
+                done_reason=f"GuardrailsBlocked: {guardrails_reason}",
+                input_text=rejected_input
             )
-            if rejected_input:
-                # Always persist rejected request input for forensic visibility.
-                blocked_entry["has_prompt"] = True
-                blocked_entry["input_text"] = rejected_input
-                blocked_entry["output_text"] = ""
             log_request(blocked_entry)
             return jsonify({
                 "error": "blocked_by_guardrails",
@@ -1048,7 +1068,9 @@ def login_page():
 
 @app.route('/login', methods=['POST'])
 def login_submit():
-    data = flask_request.get_json(force=True) if flask_request.is_json else {}
+    data = flask_request.get_json(silent=True) if flask_request.is_json else None
+    if not isinstance(data, dict):
+        data = {}
     password = data.get('password', flask_request.form.get('password', ''))
     if secrets.compare_digest(str(password), DASHBOARD_PASSWORD):
         session['authenticated'] = True
@@ -1108,7 +1130,9 @@ def api_settings_get():
 @app.route('/api/settings', methods=['POST'])
 @login_required
 def api_settings_save():
-    data = flask_request.get_json(force=True)
+    data = flask_request.get_json()
+    if not isinstance(data, dict):
+        return jsonify({"error": "expected a JSON object"}), 400
     settings = load_settings()
     allowed = ['poll_interval', 'client_map', 'retention_months', 'theme', 'mode', 'sync_theme', 'log_prompts']
     for k in allowed:
@@ -1446,9 +1470,12 @@ if __name__ == '__main__':
     threading.Thread(target=run_proxy, daemon=True).start()
 
     # Start dashboard on port 8088
-    print(f"[DASHBOARD] Ollama Monitor v1.2.1 starting on port 8088 (waitress, {DASHBOARD_THREADS} threads)")
+    print(f"[DASHBOARD] Ollama Monitor v1.2.2 starting on port 8088 (waitress, {DASHBOARD_THREADS} threads)")
     print(f"[DASHBOARD] Monitoring: {OLLAMA_URL}")
     print(f"[DASHBOARD] Container: {OLLAMA_CONTAINER}")
     print(f"[DASHBOARD] History: {HISTORY_FILE}")
     print(f"[DASHBOARD] Proxy: port {PROXY_PORT} → {OLLAMA_URL}")
+    if not DASHBOARD_PASSWORD:
+        print("[DASHBOARD] WARNING: DASHBOARD_PASSWORD is not set. Anyone who can reach port 8088 "
+              "can use the dashboard, change its settings and read logged prompts.")
     serve(app, host='0.0.0.0', port=8088, threads=DASHBOARD_THREADS)
