@@ -2,6 +2,23 @@
 
 All notable changes to ollama-dashboard will be documented in this file.
 
+## [v1.2.2] - 2026-11-02
+
+### Security
+- **Other websites could change the dashboard through your browser** — a web page you visited could post a hidden form to the dashboard and, for example, turn on prompt logging or clear all history. This worked without a password, and with one in browsers that send cookies on such posts (such as Firefox). POST requests to the dashboard must now be JSON, which a form can't send and another site's script can't send without a CORS check the dashboard never approves. The login cookie is also `SameSite=Lax` now
+- **Blocked prompts were saved with prompt logging off** — when guardrails blocked a request, its prompt was written to `prompts.jsonl` regardless of the "Log prompts & responses" setting. Blocked prompts are now kept only when prompt logging is on, like every other request; the block and its reason are still recorded in history
+
+### Changed
+- Scripts that call the dashboard API must send POST bodies as JSON with `Content-Type: application/json` (`{}` for `/api/clear`); other POSTs get `415`. The proxy on port 11434 is unchanged
+- Without `DASHBOARD_PASSWORD`, the container log and the prompt-logging setting now warn that anyone who can reach the dashboard can read logged prompts. The README examples and Unraid template now recommend setting a password
+
+### Fixed
+- README `docker run` and `curl` examples ended lines with `\\` instead of `\`, so pasting them ran each line as a separate command
+- The Unraid install steps in the README sat under Prompt Logging; they're now in Quick Start, with `DASHBOARD_PASSWORD` and `SECRET_KEY` added to the environment variable table
+
+### Removed
+- `deploy.sh` — it failed partway (it copied a template file that doesn't exist and left out `static/` and `login.html`), and it would have overwritten the saved settings of an existing `ollama-dashboard` container on Unraid. The README now has a three-line build-from-source section instead
+
 ## [v1.2.1] - 2026-10-29
 
 ### Security

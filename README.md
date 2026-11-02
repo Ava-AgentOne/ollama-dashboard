@@ -61,17 +61,20 @@ The dashboard ships with **3 themes**, each with dark and light modes:
 ### Docker Run (Standard Bridge)
 
 ```bash
-docker run -d \\
-  --name ollama-dashboard \\
-  --restart unless-stopped \\
-  -p 8088:8088 \\
-  -v /mnt/user/appdata/ollama-dashboard:/data \\
-  -v /var/run/docker.sock:/var/run/docker.sock:ro \\
-  -e OLLAMA_URL=http://<OLLAMA_IP>:11434 \\
-  -e OLLAMA_CONTAINER=ollama-intel \\
-  -e POLL_INTERVAL=5 \\
+docker run -d \
+  --name ollama-dashboard \
+  --restart unless-stopped \
+  -p 8088:8088 \
+  -v /mnt/user/appdata/ollama-dashboard:/data \
+  -v /var/run/docker.sock:/var/run/docker.sock:ro \
+  -e OLLAMA_URL=http://<OLLAMA_IP>:11434 \
+  -e OLLAMA_CONTAINER=ollama-intel \
+  -e POLL_INTERVAL=5 \
+  -e DASHBOARD_PASSWORD=<YOUR_PASSWORD> \
   ghcr.io/ava-agentone/ollama-dashboard:latest
 ```
+
+> Replace `<OLLAMA_IP>` with the IP of your Ollama container, and `<YOUR_PASSWORD>` with a password for the dashboard. The password is optional but recommended: without it, anyone who can reach port 8088 can use the dashboard, change its settings and read logged prompts.
 
 > Access the dashboard at `http://<your-server-ip>:8088`
 
@@ -80,24 +83,61 @@ docker run -d \\
 If you prefer the container to have its own IP on your LAN (common on Unraid):
 
 ```bash
-docker run -d \\
-  --name ollama-dashboard \\
-  --restart unless-stopped \\
-  --network br0 \\
-  --ip <YOUR_IP> \\
-  -v /mnt/user/appdata/ollama-dashboard:/data \\
-  -v /var/run/docker.sock:/var/run/docker.sock:ro \\
-  -e OLLAMA_URL=http://<OLLAMA_IP>:11434 \\
-  -e OLLAMA_CONTAINER=ollama-intel \\
-  -e POLL_INTERVAL=5 \\
+docker run -d \
+  --name ollama-dashboard \
+  --restart unless-stopped \
+  --network br0 \
+  --ip <YOUR_IP> \
+  -v /mnt/user/appdata/ollama-dashboard:/data \
+  -v /var/run/docker.sock:/var/run/docker.sock:ro \
+  -e OLLAMA_URL=http://<OLLAMA_IP>:11434 \
+  -e OLLAMA_CONTAINER=ollama-intel \
+  -e POLL_INTERVAL=5 \
+  -e DASHBOARD_PASSWORD=<YOUR_PASSWORD> \
   ghcr.io/ava-agentone/ollama-dashboard:latest
 ```
 
-> Replace `<YOUR_IP>` with a free static IP on your LAN, and `<OLLAMA_IP>` with the IP of your Ollama container.
+> Replace `<YOUR_IP>` with a free static IP on your LAN, `<OLLAMA_IP>` with the IP of your Ollama container, and `<YOUR_PASSWORD>` with a password for the dashboard.
 
 > ⚠️ **Networking Note**: If your Ollama container runs on br0 (macvlan), the dashboard must also be on br0. Linux hosts cannot reach their own macvlan containers — so using `host` networking for the dashboard while Ollama is on br0 will result in "No route to host" errors.
 
 > The `docker.sock` line in both examples is optional and gives the container full control of Docker — see [Docker Socket (Optional)](#docker-socket-optional).
+
+### Unraid Private Apps (Recommended)
+
+Add all Ava-AgentOne containers to your Unraid **Apps** tab:
+
+1. Run in your Unraid terminal:
+   ```bash
+   mkdir -p /boot/config/plugins/community.applications/private/Ava-AgentOne
+   curl -o /boot/config/plugins/community.applications/private/Ava-AgentOne/ollama-dashboard.xml \
+     https://raw.githubusercontent.com/Ava-AgentOne/unraid-templates/main/ollama-dashboard.xml
+   ```
+2. Go to **Apps** tab → **Private Apps** in the left sidebar
+3. Click **Install**, configure your settings, and click **Apply**
+
+> 💡 See [unraid-templates](https://github.com/Ava-AgentOne/unraid-templates) for an auto-sync script that keeps templates updated.
+
+### Unraid Template (Manual Install)
+
+Alternatively, paste the template URL directly in Unraid:
+
+1. In Unraid, go to **Docker** → **Add Container** → **Template** dropdown → paste this URL:
+   ```
+   https://raw.githubusercontent.com/Ava-AgentOne/ollama-dashboard/main/unraid-template.xml
+   ```
+2. Set your **Ollama URL**, **Ollama Container Name** and **Dashboard Password**, click **Apply**
+3. Open the dashboard at `http://<YOUR-IP>:8088`
+
+### Build From Source
+
+```bash
+git clone https://github.com/Ava-AgentOne/ollama-dashboard.git
+cd ollama-dashboard
+docker build -t ollama-dashboard:local .
+```
+
+Then use `ollama-dashboard:local` in place of `ghcr.io/ava-agentone/ollama-dashboard:latest` in the `docker run` commands above.
 
 ## 🔀 API Proxy (Token Tracking)
 
@@ -193,32 +233,6 @@ Toggle **"Log prompts & responses"** in **Settings → Logging** within the dash
 
 > ⚠️ **Privacy Note**: When enabled, full prompt text is stored **unencrypted** on disk. If your dashboard data volume is shared or accessible to others, be mindful of sensitive content in prompts.
 
-### Unraid Private Apps (Recommended)
-
-Add all Ava-AgentOne containers to your Unraid **Apps** tab:
-
-1. Run in your Unraid terminal:
-   ```bash
-   mkdir -p /boot/config/plugins/community.applications/private/Ava-AgentOne
-   curl -o /boot/config/plugins/community.applications/private/Ava-AgentOne/ollama-dashboard.xml \\
-     https://raw.githubusercontent.com/Ava-AgentOne/unraid-templates/main/ollama-dashboard.xml
-   ```
-2. Go to **Apps** tab → **Private Apps** in the left sidebar
-3. Click **Install**, configure your settings, and click **Apply**
-
-> 💡 See [unraid-templates](https://github.com/Ava-AgentOne/unraid-templates) for an auto-sync script that keeps templates updated.
-
-### Unraid Template (Manual Install)
-
-Alternatively, paste the template URL directly in Unraid:
-
-1. In Unraid, go to **Docker** → **Add Container** → **Template** dropdown → paste this URL:
-   ```
-   https://raw.githubusercontent.com/Ava-AgentOne/ollama-dashboard/main/unraid-template.xml
-   ```
-2. Set your **Ollama URL** and **Ollama Container Name**, click **Apply**
-3. Open the dashboard at `http://<YOUR-IP>:8088`
-
 ## ⚙️ Environment Variables
 
 | Variable | Default | Description |
@@ -228,6 +242,8 @@ Alternatively, paste the template URL directly in Unraid:
 | `POLL_INTERVAL` | `5` | How often to poll Ollama status (seconds) |
 | `PROXY_TIMEOUT` | `600` | Proxy upstream timeout to Ollama (seconds) |
 | `DATA_DIR` | `/data` | Path for persistent history storage |
+| `DASHBOARD_PASSWORD` | *(empty)* | Password for the dashboard. Recommended: without it, anyone who can reach port 8088 can use the dashboard, change its settings and read logged prompts |
+| `SECRET_KEY` | *(new random key each start)* | Signs login sessions. Set it to stay logged in when the container restarts |
 | `DOCKER_HOST` | *(the mounted socket)* | Docker API to read Ollama's logs from, e.g. a read-only socket proxy at `tcp://dashboard-docker-proxy:2375` (see **Docker Socket** below) |
 
 ### Nemo Guardrails Variables
@@ -298,6 +314,8 @@ Keep the proxy reachable by the dashboard only: don't publish its port or put it
 | `/api/trim` | POST | Trim old history entries |
 | `/api/clear` | POST | Clear all history (including prompt logs) |
 | `/api/updates` | GET | Check for package and image updates |
+
+POST endpoints need a JSON body sent with `Content-Type: application/json` (`{}` for `/api/clear`); other POSTs get `415`. This stops other websites from changing settings or clearing history through your browser.
 
 ## 🔌 Companion Projects
 
