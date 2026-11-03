@@ -848,6 +848,9 @@ docker build --no-cache -t ollama-intel .
           <span style="font-size:12px;color:var(--text-dim);">Enable</span>
         </label>
       </div>
+      <p id="logPromptsNoAuth" style="display:none;font-size:12px;color:var(--accent-err);margin:8px 0 0;">
+        No dashboard password is set, so anyone who can open this page can read logged prompts. Set <code>DASHBOARD_PASSWORD</code> to protect them.
+      </p>
     </div>
 
     <!-- Appearance -->
@@ -906,6 +909,7 @@ docker build --no-cache -t ollama-intel .
     <h3>API Documentation</h3>
     <p style="font-size:13px;color:var(--text-dim);margin-bottom:16px;">
       All endpoints return JSON. When password protection is enabled, requests require a valid session cookie.
+      POST requests must send a JSON body with <code>Content-Type: application/json</code>; other POSTs get <code>415</code>.
       The proxy on port 11434 forwards to Ollama and is <strong>not</strong> password-protected (clients like Open WebUI connect directly).
     </p>
 
@@ -943,7 +947,7 @@ docker build --no-cache -t ollama-intel .
       <div class="api-endpoint">
         <span class="api-method post">POST</span>
         <span class="api-path">/api/clear</span>
-        <span class="api-desc">Delete all history data</span>
+        <span class="api-desc">Delete all history data — body: <code>{}</code></span>
       </div>
       <div class="api-endpoint">
         <span class="api-method get">GET</span>
@@ -1846,7 +1850,7 @@ async function trimByTime() {
 async function clearHistory() {
   if(!confirm('Clear ALL history? This cannot be undone.')) return;
   try {
-    await fetch(`${API}/api/clear`,{method:'POST'});
+    await fetch(`${API}/api/clear`,{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
     showToast('History cleared');
     await fetchHistory();
   } catch(e){showToast('Clear failed',true);}
@@ -2037,8 +2041,10 @@ async function loadSettingsUI() {
       document.getElementById('authDocInfo').innerHTML =
         'Password protection is <strong>enabled</strong>. All dashboard and API requests require a valid session cookie.';
       document.getElementById('authDocEndpoints').style.display = '';
+      document.getElementById('logPromptsNoAuth').style.display = 'none';
     } else {
       document.getElementById('logoutBtn').style.display = 'none';
+      document.getElementById('logPromptsNoAuth').style.display = '';
     }
 
     // If sync theme is on, apply server-saved theme
