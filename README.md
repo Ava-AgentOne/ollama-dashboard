@@ -45,6 +45,10 @@ Designed as a companion to [ollama-intel](https://github.com/Ava-AgentOne/ollama
 | 📦 **History Export** | Export, trim, and clear request history as JSON |
 | 🔒 **Deduplication** | Hash-based log entry deduplication prevents duplicates |
 | 📈 **Token Tracking** | Full token tracking via proxy — prompt tokens, generation tokens, tok/s |
+| 🔐 **Password Login** | Optional login page (`DASHBOARD_PASSWORD`); you stay logged in for 30 days |
+| 🏷️ **Client Names** | Give client IPs a name and icon, so history shows "Open WebUI" instead of an address — under **Settings** or with `CLIENT_MAP` |
+| ⚙️ **Settings Page** | Poll interval, history retention, prompt logging, client names, and theme sync across browsers, saved in the data folder |
+| 📲 **Install as an App** | Add the dashboard to a phone or desktop home screen, and it opens in its own window |
 
 ## 🎨 Themes
 
@@ -240,7 +244,11 @@ Toggle **"Log prompts & responses"** in **Settings → Logging** within the dash
 | `OLLAMA_URL` | `http://OLLAMA_IP:11434` | Full URL to your Ollama API endpoint |
 | `OLLAMA_CONTAINER` | `ollama-intel` | Docker container name for log parsing |
 | `POLL_INTERVAL` | `5` | How often to poll Ollama status (seconds) |
+| `CLIENT_MAP` | `{}` | JSON map of client IPs to names and icons, e.g. `{"192.168.1.100":{"name":"Open WebUI","icon":"🌐"}}`. Also editable under **Settings** |
+| `PROXY_PORT` | `11434` | Port of the Ollama API proxy. Point clients here for token tracking |
 | `PROXY_TIMEOUT` | `600` | Proxy upstream timeout to Ollama (seconds) |
+| `PROXY_THREADS` | `16` | Proxy worker threads; each open request or stream uses one |
+| `DASHBOARD_THREADS` | `8` | Dashboard worker threads |
 | `DATA_DIR` | `/data` | Path for persistent history storage |
 | `DASHBOARD_PASSWORD` | *(empty)* | Password for the dashboard. Recommended: without it, anyone who can reach port 8088 can use the dashboard, change its settings and read logged prompts |
 | `SECRET_KEY` | *(new random key each start)* | Signs login sessions. Set it to stay logged in when the container restarts |
@@ -294,17 +302,19 @@ Keep the proxy reachable by the dashboard only: don't publish its port or put it
 
 | Component | Technology |
 |-----------|------------|
-| **Backend** | Python 3.11, Flask |
+| **Backend** | Python 3.13, Flask, served by waitress |
 | **Frontend** | Jinja2 Templates, Vanilla JS |
 | **Charts** | Chart.js |
 | **Log Parsing** | Docker SDK for Python |
-| **Container** | ~60MB lightweight image |
+| **Container** | ~50 MB download |
 
 ## 🔌 API Endpoints
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/` | GET | Dashboard web interface |
+| `/login` | GET, POST | Login page and password check (only when `DASHBOARD_PASSWORD` is set) |
+| `/logout` | GET | Log out |
 | `/api/status` | GET | Current Ollama status (models, running state, guardrails info) |
 | `/api/history` | GET | Full request/benchmark/event history |
 | `/api/benchmark` | POST | Run a benchmark against a model |
@@ -314,6 +324,9 @@ Keep the proxy reachable by the dashboard only: don't publish its port or put it
 | `/api/trim` | POST | Trim old history entries |
 | `/api/clear` | POST | Clear all history (including prompt logs) |
 | `/api/updates` | GET | Check for package and image updates |
+| `/api/settings` | GET | Dashboard settings |
+| `/api/settings` | POST | Save settings |
+| `/api/client-map` | GET | Client IP-to-name mapping in use |
 
 POST endpoints need a JSON body sent with `Content-Type: application/json` (`{}` for `/api/clear`); other POSTs get `415`. This stops other websites from changing settings or clearing history through your browser.
 
